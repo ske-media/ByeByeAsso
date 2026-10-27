@@ -1,0 +1,23 @@
+{
+  "name": "@kroov/payments",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Payment provider port (Stripe Connect adapter in Phase 3) with a sandbox adapter for tests.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "@kroov/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@kroov/config": "workspace:*",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

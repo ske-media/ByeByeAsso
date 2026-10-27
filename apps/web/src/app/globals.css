@@ -1,0 +1,4 @@
+@import "@kroov/ui/styles.css";
+
+/* Generate utilities for classes used inside this app. */
+@source "./**/*.{ts,tsx}";

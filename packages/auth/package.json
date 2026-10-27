@@ -1,0 +1,24 @@
+{
+  "name": "@kroov/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Authentication (sessions, credentials, magic links) and the server-side authorization kernel (RBAC, tenant isolation).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "@kroov/config": "workspace:*",
+    "@kroov/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@kroov/config": "workspace:*",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

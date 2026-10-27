@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+/* Scan component sources in this package so utility classes used here are generated. */
+@source "./**/*.{ts,tsx}";
+
+/*
+ * Kroov design tokens (Tailwind v4 theme). Mirror of tokens.ts.
+ * Semantic names only: components never hard-code hex values.
+ */
+@theme {
+  --color-canvas: #faf7ee;
+  --color-ink: #181914;
+  --color-surface: #fffef9;
+  --color-sidebar: #f0eee5;
+  --color-lime: #dfff00;
+  --color-pink: #f6aed5;
+  --color-orange: #ffab66;
+  --color-lavender: #dcd0fa;
+  --color-border: #deddd3;
+  --color-border-strong: #c6c8bc;
+  --color-muted: #63665b;
+  --color-neutral: #ecece4;
+  --color-error-bg: #fae4df;
+  --color-error-text: #85272e;
+  --color-danger: #a32d34;
+  --color-disabled-bg: #e5e5de;
+  --color-disabled-text: #62665b;
+
+  --font-sans: Arial, Helvetica, ui-sans-serif, system-ui, sans-serif;
+  --font-brand: "Arial Black", Arial, Helvetica, sans-serif;
+
+  --radius-control: 8px;
+  --radius-panel: 14px;
+  --radius-pill: 999px;
+
+  --spacing-sidebar: 214px;
+  --spacing-topbar: 76px;
+  --spacing-gutter: 32px;
+  --spacing-gutter-mobile: 20px;
+  --spacing-touch: 44px;
+
+  --shadow-sticker: 4px 4px 0 0 var(--color-ink);
+
+  --text-page-title: 43px;
+  --text-page-title--line-height: 1.07;
+  --text-page-title--letter-spacing: -1.9px;
+  --text-section-title: 27px;
+  --text-section-title--line-height: 1.15;
+  --text-section-title--letter-spacing: -0.9px;
+  --text-panel-title: 17px;
+  --text-panel-title--line-height: 1.3;
+  --text-panel-title--letter-spacing: -0.4px;
+  --text-stat: 37px;
+  --text-stat--line-height: 1.1;
+  --text-stat--letter-spacing: -1.8px;
+  --text-eyebrow: 10px;
+  --text-eyebrow--line-height: 1.4;
+  --text-eyebrow--letter-spacing: 1.5px;
+  --text-meta: 12px;
+  --text-meta--line-height: 1.5;
+
+  --ease-ui: cubic-bezier(0.2, 0, 0, 1);
+  --duration-ui: 150ms;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--color-canvas);
+  }
+
+  /* Double focus ring: black + cream offset, visible on lime and cream alike. */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--color-canvas);
+    border-radius: var(--radius-control);
+  }
+
+  /* Mobile inputs at 16px prevent iOS zoom. */
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  ::selection {
+    background: var(--color-lime);
+    color: var(--color-ink);
+  }
+}
+
+@layer components {
+  .k-wordmark {
+    font-family: var(--font-brand);
+    font-weight: 900;
+    letter-spacing: -0.09em;
+    line-height: 1;
+  }
+
+  .k-tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .k-skeleton {
+    background: linear-gradient(90deg, var(--color-neutral) 0%, #f5f5ee 50%, var(--color-neutral) 100%);
+    background-size: 200% 100%;
+    animation: k-shimmer 1.4s ease-in-out infinite;
+    border-radius: var(--radius-control);
+  }
+
+  @keyframes k-shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  .k-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}

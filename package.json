@@ -1,0 +1,41 @@
+{
+  "name": "kroov",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kroov — Event Operating System (multi-tenant SaaS). Modular monolith monorepo.",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "typecheck": "turbo run typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "turbo run test",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:security": "vitest run --project security",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "db:generate": "pnpm --filter @kroov/database generate",
+    "db:migrate": "pnpm --filter @kroov/database migrate",
+    "db:check": "pnpm --filter @kroov/database check",
+    "db:reset": "pnpm --filter @kroov/database reset",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:nuke": "docker compose -f infra/docker-compose.yml down -v",
+    "validate": "pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build",
+    "secrets:scan": "node scripts/scan-secrets.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.3",
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.5",
+    "turbo": "2.11.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

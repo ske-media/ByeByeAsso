@@ -1,0 +1,40 @@
+{
+  "name": "@kroov/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Kroov web application (Next.js App Router): organizer workspace, public pages, personal space, scanner, /api/v1.",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "@kroov/auth": "workspace:*",
+    "@kroov/config": "workspace:*",
+    "@kroov/database": "workspace:*",
+    "@kroov/domain": "workspace:*",
+    "@kroov/ui": "workspace:*",
+    "@kroov/validation": "workspace:*",
+    "dotenv": "18.0.9",
+    "lucide-react": "1.62.0",
+    "next": "16.4.3",
+    "pino": "10.4.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "0.0.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "postcss": "8.5.32",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

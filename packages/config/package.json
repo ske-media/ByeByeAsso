@@ -1,0 +1,26 @@
+{
+  "name": "@kroov/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared configuration: base tsconfig, environment schema, constants.",
+  "exports": {
+    "./env": "./src/env.ts",
+    "./constants": "./src/constants.ts",
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/nextjs.json": "./tsconfig/nextjs.json",
+    "./tsconfig/node.json": "./tsconfig/node.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

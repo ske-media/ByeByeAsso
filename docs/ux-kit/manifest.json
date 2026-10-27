@@ -1,0 +1,482 @@
+[
+  {
+    "id": "01",
+    "title": "Connexion",
+    "section": "Connexion",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/01-connexion.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "02",
+    "title": "Créer son organisation",
+    "section": "Paramètres",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/02-creer-son-organisation.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "03",
+    "title": "Tableau de bord",
+    "section": "Vue d’ensemble",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/03-tableau-de-bord.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "04",
+    "title": "Liste des événements",
+    "section": "Événements",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/04-liste-des-evenements.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "05",
+    "title": "Créer un événement",
+    "section": "Événements",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/05-creer-un-evenement.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "06",
+    "title": "Configuration des billets",
+    "section": "Événements",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/06-configuration-des-billets.png",
+    "width": 2880,
+    "height": 2086
+  },
+  {
+    "id": "07",
+    "title": "Publication",
+    "section": "Événements",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/07-publication.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "08",
+    "title": "Piloter un événement",
+    "section": "Événements",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/08-piloter-un-evenement.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "09",
+    "title": "Commandes",
+    "section": "Billetterie",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/09-commandes.png",
+    "width": 2880,
+    "height": 2102
+  },
+  {
+    "id": "10",
+    "title": "Détail et remboursement",
+    "section": "Billetterie",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/10-detail-et-remboursement.png",
+    "width": 2880,
+    "height": 2148
+  },
+  {
+    "id": "11",
+    "title": "Bénévoles et candidatures",
+    "section": "Bénévoles",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/11-benevoles-et-candidatures.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "12",
+    "title": "Examiner une candidature",
+    "section": "Bénévoles",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/12-examiner-une-candidature.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "13",
+    "title": "Postes et besoins",
+    "section": "Planning",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/13-postes-et-besoins.png",
+    "width": 2880,
+    "height": 2224
+  },
+  {
+    "id": "14",
+    "title": "Proposition automatique",
+    "section": "Planning",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/14-proposition-automatique.png",
+    "width": 2880,
+    "height": 2112
+  },
+  {
+    "id": "15",
+    "title": "Arbitrer le planning",
+    "section": "Planning",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/15-arbitrer-le-planning.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "16",
+    "title": "Validation humaine et publication",
+    "section": "Planning",
+    "mobile": false,
+    "note": "Scénario ultérieur au tableau de bord : quatre bénévoles supplémentaires ont été acceptés et les quatre affectations complétées.",
+    "png": "PNG/16-validation-humaine-et-publication.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "17",
+    "title": "Gestion des adhésions",
+    "section": "Adhésions",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/17-gestion-des-adhesions.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "18",
+    "title": "Créer une formule adhésion",
+    "section": "Adhésions",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/18-creer-une-formule-adhesion.png",
+    "width": 2880,
+    "height": 2078
+  },
+  {
+    "id": "19",
+    "title": "Marketing campagnes",
+    "section": "Marketing",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/19-marketing-campagnes.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "20",
+    "title": "Éditeur de campagne",
+    "section": "Marketing",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/20-editeur-de-campagne.png",
+    "width": 2880,
+    "height": 2016
+  },
+  {
+    "id": "21",
+    "title": "Vérification campagne",
+    "section": "Marketing",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/21-verification-campagne.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "22",
+    "title": "Finances et versements",
+    "section": "Finances",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/22-finances-et-versements.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "23",
+    "title": "Équipe et RBAC",
+    "section": "Équipe & accès",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/23-equipe-et-rbac.png",
+    "width": 2880,
+    "height": 2248
+  },
+  {
+    "id": "24",
+    "title": "Abonnement et réglages",
+    "section": "Paramètres",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/24-abonnement-et-reglages.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "25",
+    "title": "États vides, erreur et accès",
+    "section": "Vue d’ensemble",
+    "mobile": false,
+    "note": "",
+    "png": "PNG/25-etats-vides-erreur-et-acces.png",
+    "width": 2880,
+    "height": 2000
+  },
+  {
+    "id": "26",
+    "title": "Découvrir les événements",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/26-decouvrir-les-evenements.png",
+    "width": 1170,
+    "height": 3123
+  },
+  {
+    "id": "27",
+    "title": "Page événement",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/27-page-evenement.png",
+    "width": 1170,
+    "height": 3120
+  },
+  {
+    "id": "28",
+    "title": "Choix des billets",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/28-choix-des-billets.png",
+    "width": 1170,
+    "height": 3186
+  },
+  {
+    "id": "29",
+    "title": "Coordonnées acheteur",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/29-coordonnees-acheteur.png",
+    "width": 1170,
+    "height": 2877
+  },
+  {
+    "id": "30",
+    "title": "Paiement",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/30-paiement.png",
+    "width": 1170,
+    "height": 2841
+  },
+  {
+    "id": "31",
+    "title": "Confirmation de commande",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/31-confirmation-de-commande.png",
+    "width": 1170,
+    "height": 3144
+  },
+  {
+    "id": "32",
+    "title": "Billet numérique",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/32-billet-numerique.png",
+    "width": 1170,
+    "height": 2892
+  },
+  {
+    "id": "33",
+    "title": "Paiement refusé",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/33-paiement-refuse.png",
+    "width": 1170,
+    "height": 2946
+  },
+  {
+    "id": "34",
+    "title": "Réservation expirée",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/34-reservation-expiree.png",
+    "width": 1170,
+    "height": 2532
+  },
+  {
+    "id": "35",
+    "title": "Adhérer à une organisation",
+    "section": "Adhérent",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/35-adherer-a-une-organisation.png",
+    "width": 1170,
+    "height": 2904
+  },
+  {
+    "id": "36",
+    "title": "Carte adhérent et renouvellement",
+    "section": "Adhérent",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/36-carte-adherent-et-renouvellement.png",
+    "width": 1170,
+    "height": 3117
+  },
+  {
+    "id": "37",
+    "title": "Candidature bénévole",
+    "section": "Bénévole",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/37-candidature-benevole.png",
+    "width": 1170,
+    "height": 2952
+  },
+  {
+    "id": "38",
+    "title": "Disponibilités et binôme",
+    "section": "Bénévole",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/38-disponibilites-et-binome.png",
+    "width": 1170,
+    "height": 3174
+  },
+  {
+    "id": "39",
+    "title": "Suivi de candidature",
+    "section": "Bénévole",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/39-suivi-de-candidature.png",
+    "width": 1170,
+    "height": 2724
+  },
+  {
+    "id": "40",
+    "title": "Missions publiées",
+    "section": "Bénévole",
+    "mobile": true,
+    "note": "Scénario après acceptation de Maya et publication V4.",
+    "png": "PNG/40-missions-publiees.png",
+    "width": 1170,
+    "height": 3057
+  },
+  {
+    "id": "41",
+    "title": "Scanner les billets",
+    "section": "Contrôle",
+    "mobile": true,
+    "note": "Scénario jour J, distinct du tableau de bord de préparation.",
+    "png": "PNG/41-scanner-les-billets.png",
+    "width": 1170,
+    "height": 2691
+  },
+  {
+    "id": "42",
+    "title": "Contrôle valide",
+    "section": "Contrôle",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/42-controle-valide.png",
+    "width": 1170,
+    "height": 2703
+  },
+  {
+    "id": "43",
+    "title": "Billet déjà scanné",
+    "section": "Contrôle",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/43-billet-deja-scanne.png",
+    "width": 1170,
+    "height": 2856
+  },
+  {
+    "id": "44",
+    "title": "Contrôle hors connexion",
+    "section": "Contrôle",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/44-controle-hors-connexion.png",
+    "width": 1170,
+    "height": 2616
+  },
+  {
+    "id": "45",
+    "title": "Profil et préférences",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/45-profil-et-preferences.png",
+    "width": 1170,
+    "height": 2868
+  },
+  {
+    "id": "46",
+    "title": "Réinitialiser le mot de passe",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/46-reinitialiser-le-mot-de-passe.png",
+    "width": 1170,
+    "height": 2532
+  },
+  {
+    "id": "47",
+    "title": "Renouvellement adhésion",
+    "section": "Adhérent",
+    "mobile": true,
+    "note": "Scénario décembre 2027 : renouvellement annuel manuel.",
+    "png": "PNG/47-renouvellement-adhesion.png",
+    "width": 1170,
+    "height": 2835
+  },
+  {
+    "id": "48",
+    "title": "Invitation équipe",
+    "section": "Public",
+    "mobile": true,
+    "note": "",
+    "png": "PNG/48-invitation-equipe.png",
+    "width": 1170,
+    "height": 2736
+  }
+]

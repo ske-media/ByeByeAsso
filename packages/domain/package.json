@@ -1,0 +1,40 @@
+{
+  "name": "@kroov/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Kroov domain modules (modular monolith). Each module exposes a public service API; cross-module access goes through those APIs only.",
+  "exports": {
+    "./kernel": "./src/kernel/index.ts",
+    "./identity": "./src/identity/index.ts",
+    "./organizations": "./src/organizations/index.ts",
+    "./events": "./src/events/index.ts",
+    "./ticketing": "./src/ticketing/index.ts",
+    "./orders": "./src/orders/index.ts",
+    "./payments": "./src/payments/index.ts",
+    "./memberships": "./src/memberships/index.ts",
+    "./volunteers": "./src/volunteers/index.ts",
+    "./scheduling": "./src/scheduling/index.ts",
+    "./crm": "./src/crm/index.ts",
+    "./marketing": "./src/marketing/index.ts",
+    "./analytics": "./src/analytics/index.ts",
+    "./tasks": "./src/tasks/index.ts",
+    "./billing": "./src/billing/index.ts",
+    "./audit": "./src/audit/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "@kroov/config": "workspace:*",
+    "@kroov/database": "workspace:*",
+    "@kroov/validation": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: test
+  DATABASE_URL: postgres://kroov:kroov@localhost:5432/kroov
+  DATABASE_URL_TEST: postgres://kroov:kroov@localhost:5432/kroov_test
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  AUTH_SECRET: ci-only-secret-value-that-is-at-least-32-characters-long
+
+jobs:
+  validate:
+    name: Lint · typecheck · unit · integration · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kroov
+          POSTGRES_PASSWORD: kroov
+          POSTGRES_DB: kroov
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kroov -d kroov"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create test database
+        run: psql "$DATABASE_URL" -c "CREATE DATABASE kroov_test OWNER kroov;"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm db:check
+      - run: pnpm db:migrate
+      - run: pnpm test:unit
+      - run: pnpm test:integration
+      - run: pnpm test:security
+      - run: pnpm build
+
+  e2e:
+    name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: validate
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kroov
+          POSTGRES_PASSWORD: kroov
+          POSTGRES_DB: kroov
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kroov -d kroov"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm --filter @kroov/web build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 7

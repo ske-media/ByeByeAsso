@@ -1,0 +1,23 @@
+{
+  "name": "@kroov/notifications",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "E-mail/notification port with console (dev), SMTP (Mailpit) and provider adapters.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "@kroov/config": "workspace:*"
+  },
+  "devDependencies": {
+    "@kroov/config": "workspace:*",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

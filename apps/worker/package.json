@@ -1,0 +1,29 @@
+{
+  "name": "@kroov/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Kroov background worker: durable job processing on PostgreSQL (pg-boss), outbox relay, scheduled maintenance.",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root . --passWithNoTests"
+  },
+  "dependencies": {
+    "@kroov/config": "workspace:*",
+    "@kroov/database": "workspace:*",
+    "@kroov/domain": "workspace:*",
+    "dotenv": "18.0.9",
+    "drizzle-orm": "0.45.4",
+    "pg-boss": "12.38.0",
+    "pino": "10.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}
