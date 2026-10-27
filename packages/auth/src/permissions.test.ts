@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS, ROLES } from "./index";
+import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS, ROLES } from "./catalogue";
 
 describe("permission catalogue", () => {
   it("has unique, dotted permission names", () => {

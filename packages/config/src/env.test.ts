@@ -28,6 +28,12 @@ describe("server environment schema", () => {
     expect(env.STRIPE_SECRET_KEY).toBeUndefined();
   });
 
+  it("derives APP_ENV safely: production when NODE_ENV is production and APP_ENV unset", () => {
+    expect(loadServerEnv({ ...minimal, NODE_ENV: "production" }).APP_ENV).toBe("production");
+    expect(loadServerEnv({ ...minimal, NODE_ENV: "production", APP_ENV: "test" }).APP_ENV).toBe("test");
+    expect(loadServerEnv({ ...minimal }).APP_ENV).toBe("development");
+  });
+
   it("rejects a short AUTH_SECRET", () => {
     expect(() => loadServerEnv({ ...minimal, AUTH_SECRET: "trop-court" })).toThrow(/AUTH_SECRET/);
   });

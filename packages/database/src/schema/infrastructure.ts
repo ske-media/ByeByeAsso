@@ -10,15 +10,15 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { createdAt, id, timestamps } from "./_shared";
+import { organizations } from "./identity";
 
 /**
- * INFRASTRUCTURE domain — Phase 0 subset.
+ * INFRASTRUCTURE domain.
  *
- * These tables have no tenant foreign keys yet (organizations arrive in Phase 1).
- * `organization_id` columns are nullable text-free UUIDs here and will gain FKs
- * in the Phase 1 migration once `organizations` exists.
+ * `organization_id` columns are nullable (platform-level rows) and reference `organizations`.
  *
  * Authorization scope: platform-internal. Never exposed through /api/v1 directly.
  * Retention: see each table.
@@ -82,8 +82,8 @@ export const outboxEvents = pgTable(
     /** Dotted event name, e.g. "order.paid". */
     eventType: text("event_type").notNull(),
     payload: jsonb("payload").notNull(),
-    /** Tenant scope when applicable (FK added in Phase 1). */
-    organizationId: text("organization_id"),
+    /** Tenant scope when applicable. */
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
     status: outboxStatus("status").notNull().default("pending"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
@@ -118,7 +118,7 @@ export const jobExecutions = pgTable(
     jobId: text("job_id").notNull(),
     attempt: integer("attempt").notNull().default(1),
     status: jobExecutionStatus("status").notNull().default("running"),
-    organizationId: text("organization_id"),
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "set null" }),
     input: jsonb("input"),
     output: jsonb("output"),
     error: text("error"),
@@ -138,8 +138,8 @@ export const jobExecutions = pgTable(
 /* ------------------------------------------------------------------------- */
 
 /**
- * Simple feature flags: global default plus optional per-organization override
- * (override FK added in Phase 1). Evaluated server-side only.
+ * Simple feature flags: global default plus optional per-organization override.
+ * Evaluated server-side only.
  */
 export const featureFlags = pgTable(
   "feature_flags",
@@ -148,7 +148,7 @@ export const featureFlags = pgTable(
     key: text("key").notNull(),
     description: text("description").notNull().default(""),
     enabled: boolean("enabled").notNull().default(false),
-    organizationId: text("organization_id"),
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
     ...timestamps(),
   },
   (t) => [

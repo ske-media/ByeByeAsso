@@ -1,6 +1,6 @@
 # Kroov — Architecture
 
-Version : Phase 0 (fondation) · 27 octobre 2026.
+Version : Phase 1 (identité et organisations) · 28 octobre 2026.
 
 Kroov est un **monolithe modulaire** TypeScript strict déployé en deux processus (web + worker) autour d'une base PostgreSQL unique et autoritaire. Les modules métier vivent dans `packages/domain` et exposent chacun une API publique ; aucune table n'est manipulée depuis un module étranger.
 
@@ -73,11 +73,11 @@ apps/worker           pg-boss : relais outbox, maintenance, (phase 6) runs de pl
 packages/config       tsconfig partagés, schéma d'environnement (zod), constantes
 packages/validation   schémas zod réutilisables, messages d'erreur en français
 packages/database     client Drizzle, schéma, migrations SQL, helpers de test
-packages/domain       modules métier + noyau partagé (erreurs, Result, Money, machine à états)
-packages/auth         catalogue permissions / rôles ; (phase 1) Better Auth + requirePermission
+packages/domain       modules métier + noyau partagé (erreurs, Result, Money, machine à états) + authorization (RBAC)
+packages/auth         catalogue permissions / rôles ("@kroov/auth"), instance Better Auth ("@kroov/auth/server")
 packages/ui           tokens de design, primitives, shells (organisation / public / contrôle)
 packages/payments     port fournisseur de paiement
-packages/notifications port e-mail + adaptateur console
+packages/notifications port e-mail + adaptateurs console / file (tests) / smtp, gabarit transactionnel
 packages/scheduling   contrat du moteur de planning (entrée immuable → proposition)
 tests/integration     tests sur PostgreSQL réel (DATABASE_URL_TEST)
 tests/security        tests négatifs (secrets, isolation tenant à partir de la phase 1)
@@ -94,7 +94,7 @@ infra                 docker-compose (Postgres, MinIO, Mailpit)
 4. Les routes (`apps/web`) ne contiennent aucune règle métier : validation → appel de service avec un `Actor` → mapping des erreurs.
 5. Les effets de bord inter-modules passent par des événements typés écrits dans `outbox_events` **dans la même transaction** que la modification d'état.
 
-Phases d'implémentation par module : identity/organizations (1), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7), marketing (8), analytics/tasks (9), billing/audit (transverses, à partir de 1).
+Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7), marketing (8), analytics/tasks (9), billing/audit (transverses, à partir de 1).
 
 ## 5. Noyau partagé (`packages/domain/src/kernel`)
 
@@ -109,7 +109,8 @@ Phases d'implémentation par module : identity/organizations (1), events (2), ti
 - UUID générés par PostgreSQL (`gen_random_uuid()`), `timestamptz`, `snake_case`.
 - Contraintes relationnelles en base : FK explicites, index uniques partiels, `CHECK`.
 - Migrations : `pnpm db:generate` (drizzle-kit, SQL versionné dans `packages/database/migrations`) puis `pnpm db:migrate` (runner idempotent, table `public.drizzle_migrations`). `pnpm db:check` vérifie la cohérence schéma / migrations en CI.
-- Tables de phase 0 (domaine INFRASTRUCTURE) : `idempotency_records`, `outbox_events`, `job_executions`, `feature_flags`. Les colonnes `organization_id` recevront leur FK en phase 1 avec la table `organizations`.
+- Phase 0 (INFRASTRUCTURE) : `idempotency_records`, `outbox_events`, `job_executions`, `feature_flags`.
+- Phase 1 (AUTH + IDENTITY) : tables Better Auth, `user_profiles`, `organizations`, `organization_settings`, `organization_members`, `roles`, `permissions`, `role_permissions`, `member_role_assignments` (FK composite tenant-safe), `organization_invitations`, `audit_logs` ; FK `organization_id` sur les tables infra.
 - Diagramme ER : `docs/er-diagram.md` (mis à jour à chaque phase).
 
 ## 7. Processus worker
@@ -118,6 +119,10 @@ Phases d'implémentation par module : identity/organizations (1), events (2), ti
 - Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, marquage `dispatched`, backoff par ligne, échec définitif après 10 tentatives. Balayage de sûreté chaque minute ; les producteurs déclencheront le relais directement après commit (phase 1).
 - Maintenance : purge horaire des `idempotency_records` expirés, heartbeat chaque minute.
 - Arrêt propre sur SIGINT/SIGTERM (`stop({ graceful: true })`, fermeture du pool).
+
+## 7bis. Autorisation (phase 1)
+
+`requirePermission(db, actor, permission, { organizationId, eventId? })` charge en une requête les attributions de rôle de l'acteur dans l'organisation (membres actifs uniquement) et accorde la permission si une attribution organisation-wide ou une attribution limitée à `eventId` la porte. Deny by default ; les acteurs `system` / `webhook` contournent le RBAC mais restent scoppés par organisation. Les lectures d'organisation par un non-membre renvoient 404 ; les mutations 403. Le dernier propriétaire est protégé dans une transaction avec verrou `FOR UPDATE` sur l'organisation.
 
 ## 8. Sécurité (fondation)
 

@@ -13,8 +13,16 @@ const nodeEnv = z.enum(["development", "test", "production"]).default("developme
 
 const url = z.string().url();
 
+const appEnv = z.enum(["development", "test", "staging", "production"]);
+
 export const serverEnvSchema = z.object({
   NODE_ENV: nodeEnv,
+  /**
+   * Deployment environment for POLICY decisions (console e-mail allowed? secure cookies?
+   * rate limiting?). NODE_ENV belongs to the framework (`next build` always sets production).
+   * Defaults to the safe value: production whenever NODE_ENV is production.
+   */
+  APP_ENV: appEnv.optional(),
   APP_NAME: z.string().min(1).default("Kroov"),
   APP_URL: url.default("http://localhost:3000"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
@@ -33,7 +41,9 @@ export const serverEnvSchema = z.object({
   STRIPE_CONNECT_CLIENT_ID: z.string().optional(),
 
   // Email provider adapter (Phase 1 for transactional, Phase 8 for campaigns).
-  EMAIL_PROVIDER: z.enum(["console", "smtp", "resend"]).default("console"),
+  EMAIL_PROVIDER: z.enum(["console", "file", "smtp", "resend"]).default("console"),
+  /** File adapter output (tests only). */
+  EMAIL_FILE_PATH: z.string().optional(),
   EMAIL_FROM: z.string().email().default("no-reply@kroov.local"),
   SMTP_URL: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
@@ -53,7 +63,13 @@ export const serverEnvSchema = z.object({
   WORKER_CONCURRENCY: z.coerce.number().int().positive().max(64).default(4),
 });
 
-export type ServerEnv = z.infer<typeof serverEnvSchema>;
+export type ServerEnv = Omit<z.infer<typeof serverEnvSchema>, "APP_ENV"> & { APP_ENV: AppEnv };
+export type AppEnv = z.infer<typeof appEnv>;
+
+function resolveAppEnv(parsed: z.infer<typeof serverEnvSchema>): ServerEnv {
+  const APP_ENV: AppEnv = parsed.APP_ENV ?? (parsed.NODE_ENV === "production" ? "production" : parsed.NODE_ENV);
+  return { ...parsed, APP_ENV };
+}
 
 export const publicEnvSchema = z.object({
   NEXT_PUBLIC_APP_URL: url.default("http://localhost:3000"),
@@ -93,7 +109,7 @@ export function loadServerEnv(source: NodeJS.ProcessEnv = process.env): ServerEn
   if (!result.success) {
     throw new EnvValidationError(formatIssues(result.error));
   }
-  return result.data;
+  return resolveAppEnv(result.data);
 }
 
 export function loadPublicEnv(source: NodeJS.ProcessEnv = process.env): PublicEnv {

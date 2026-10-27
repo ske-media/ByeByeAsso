@@ -25,19 +25,8 @@ export interface EmailPort {
   send(message: EmailMessage): Promise<EmailSendResult>;
 }
 
-/**
- * Development adapter: logs the message and records it in memory so tests can assert on it.
- * Never used when NODE_ENV=production (guarded in the factory, Phase 1).
- */
-export class ConsoleEmailAdapter implements EmailPort {
-  readonly name = "console";
-  readonly sent: EmailMessage[] = [];
-
-  constructor(private readonly log: (line: string) => void = console.log) {}
-
-  async send(message: EmailMessage): Promise<EmailSendResult> {
-    this.sent.push(message);
-    this.log(`[email:console] → ${message.to} | ${message.subject}`);
-    return { providerMessageId: `console-${this.sent.length}`, acceptedAt: new Date() };
-  }
-}
+export { ConsoleEmailAdapter } from "./console";
+export { createEmailPort, type EmailPortConfig } from "./factory";
+export { FileEmailAdapter } from "./file";
+export { SmtpEmailAdapter } from "./smtp";
+export * from "./templates/layout";

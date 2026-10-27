@@ -1,0 +1,511 @@
+openapi: 3.1.0
+info:
+  title: Kroov API
+  version: 0.1.0-phase1
+  description: |
+    API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
+    Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
+    `{ "error": { "code", "message", "fieldErrors?", "details?" } }`.
+
+    Codes : 400 `invalid_json` · 401 `unauthenticated` · 403 `forbidden` / `forbidden_origin` ·
+    404 `not_found` · 409 `conflict` · 412 `precondition_failed` · 422 `validation_failed` · 500 `internal`.
+
+    Idempotence : les lectures sont idempotentes ; `POST /organizations` et `POST …/invitations` sont
+    protégés par unicité (slug, e-mail en attente) ; `POST /invitations/{token}/accept` est à usage unique
+    (412 au second appel). Transactions : chaque commande écrit son journal d'audit dans la même transaction.
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: kroov.session_token
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            fieldErrors:
+              type: object
+              additionalProperties: { type: array, items: { type: string } }
+            details: { type: object }
+    Profile:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        emailVerified: { type: boolean }
+        locale: { type: string, example: fr-FR }
+        timezone: { type: string, example: Europe/Paris }
+        phone: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+    Organization:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        legalForm: { type: string, enum: [association, company, collective, public_body, other] }
+        country: { type: string, example: FR }
+        timezone: { type: string }
+        status: { type: string, enum: [active, suspended, archived] }
+        createdAt: { type: string, format: date-time }
+        settings:
+          type: object
+          properties:
+            currency: { type: string, example: EUR }
+            locale: { type: string }
+            contactEmail: { type: [string, "null"] }
+            website: { type: [string, "null"] }
+    Role:
+      type: string
+      enum: [owner, organization_admin, event_manager, volunteer_manager, marketing_manager, ticketing_manager, scanner]
+    RoleGrant:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+        eventId:
+          { type: string, format: uuid, description: "Périmètre événement (phase 2). Absent = organisation entière." }
+    Member:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+        emailVerified: { type: boolean }
+        joinedAt: { type: string, format: date-time }
+        grants:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { $ref: "#/components/schemas/Role" }
+              roleName: { type: string }
+              eventId: { type: [string, "null"] }
+    Invitation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        roleName: { type: string }
+        eventId: { type: [string, "null"] }
+        status: { type: string, enum: [pending, accepted, revoked, expired] }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        lastSentAt: { type: string, format: date-time }
+        invitedByName: { type: string }
+    PublicInvitation:
+      type: object
+      properties:
+        organizationName: { type: string }
+        roleName: { type: string }
+        invitedByName: { type: string }
+        emailHint: { type: string, example: "no••••@example.org" }
+        status: { type: string, enum: [pending, accepted, revoked, expired] }
+        expiresAt: { type: string, format: date-time }
+    AuditEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string, example: member.roles_changed }
+        actorKind: { type: string }
+        actorId: { type: [string, "null"] }
+        targetType: { type: string }
+        targetId: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        metadata: { type: object }
+        createdAt: { type: string, format: date-time }
+  responses:
+    Unauthenticated:
+      {
+        description: Connexion requise,
+        content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
+    Forbidden:
+      {
+        description: Permission refusée ou origine non autorisée,
+        content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
+    NotFound:
+      {
+        description: Introuvable (ou non membre — l'existence n'est pas divulguée),
+        content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
+    Validation:
+      {
+        description: Valeurs invalides,
+        content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
+security:
+  - session: []
+paths:
+  /profiles/me:
+    get:
+      summary: Profil de l'utilisateur connecté
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Profile" } } } },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    patch:
+      summary: Modifier son profil
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 80 }
+                timezone: { type: string }
+                phone: { type: string, maxLength: 30 }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations:
+    get:
+      summary: Organisations dont je suis membre actif
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          {
+                            data:
+                              {
+                                type: array,
+                                items:
+                                  {
+                                    allOf:
+                                      [
+                                        { $ref: "#/components/schemas/Organization" },
+                                        {
+                                          type: object,
+                                          properties:
+                                            { roles: { type: array, items: { $ref: "#/components/schemas/Role" } } },
+                                        },
+                                      ],
+                                  },
+                              },
+                          },
+                      },
+                  },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    post:
+      summary: Créer une organisation (l'appelant devient propriétaire)
+      description: Audit `organization.created`. Transaction unique (organisation, réglages, membre, rôle, audit).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name: { type: string, minLength: 2, maxLength: 120 }
+                slug: { type: string, pattern: "^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$" }
+                legalForm:
+                  { type: string, enum: [association, company, collective, public_body, other], default: association }
+                country: { type: string, default: FR }
+                timezone: { type: string, default: Europe/Paris }
+      responses:
+        "201":
+          {
+            description: Créée (en-tête Location),
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Organization" } } } },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Slug déjà utilisé }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Lire une organisation
+      description: Permission `organization.read`. Les non-membres reçoivent 404.
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Organization" } } } },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Validation" }
+    patch:
+      summary: Modifier une organisation et ses réglages
+      description: Permission `organization.manage`. Audit `organization.updated`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                legalForm: { type: string }
+                country: { type: string }
+                timezone: { type: string }
+                settings:
+                  type: object
+                  properties:
+                    contactEmail: { type: string }
+                    website: { type: string }
+      responses:
+        "200": { description: OK }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/members:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Membres actifs et leurs rôles
+      description: Permission `organization.read`.
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/Member" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /organizations/{organizationId}/members/{memberId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Retirer un membre
+      description: |
+        Permission `members.manage` ; retirer un propriétaire exige d'être propriétaire ; le dernier propriétaire
+        ne peut pas être retiré (412 `last_owner`). Verrou sur la ligne organisation. Audit `member.removed`.
+      parameters:
+        - { name: reason, in: query, schema: { type: string } }
+      responses:
+        "204": { description: Retiré }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Dernier propriétaire }
+  /organizations/{organizationId}/members/{memberId}/roles:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      summary: Remplacer les rôles d'un membre
+      description: |
+        Permission `members.manage` ; accorder ou retirer `owner` exige d'être propriétaire ; protection du
+        dernier propriétaire (412). Remplacement atomique. Audit `member.roles_changed` (avant/après, motif).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grants]
+              properties:
+                grants: { type: array, maxItems: 20, items: { $ref: "#/components/schemas/RoleGrant" } }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Member" } } } },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Dernier propriétaire }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/invitations:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Invitations (toutes, 200 dernières)
+      description: Permission `members.invite`.
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/Invitation" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Inviter une adresse avec un rôle
+      description: |
+        Permission `members.invite` (rôle `owner` : propriétaire uniquement). 409 si déjà membre ou invitation en
+        attente. Jeton 256 bits envoyé par e-mail, seul son SHA-256 est stocké ; expiration 7 jours. Audit `invitation.created`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                role: { $ref: "#/components/schemas/Role" }
+                eventId: { type: string, format: uuid }
+      responses:
+        "201":
+          {
+            description: Créée,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Invitation" } } } },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Déjà membre ou invitation en attente }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/invitations/{invitationId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Annuler une invitation en attente
+      description: Permission `members.invite`. Audit `invitation.revoked`.
+      responses:
+        "204": { description: Annulée }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/invitations/{invitationId}/resend:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Renvoyer une invitation (nouveau jeton, nouvelle expiration)
+      description: Permission `members.invite`. 412 si acceptée ou annulée. Audit `invitation.resent`.
+      responses:
+        "200": { description: OK }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "412": { description: Invitation close }
+  /organizations/{organizationId}/audit:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Journal d'audit (50 dernières entrées)
+      description: Permission `organization.manage`.
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /invitations/{token}:
+    parameters:
+      - { name: token, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Métadonnées publiques d'une invitation
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/PublicInvitation" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /invitations/{token}/accept:
+    parameters:
+      - { name: token, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Accepter une invitation avec le compte connecté
+      description: |
+        E-mail du compte vérifié et identique à l'adresse invitée (403 sinon). 412 si expirée, déjà utilisée ou
+        e-mail non vérifié. Usage unique (verrou `FOR UPDATE`). Audit `invitation.accepted`.
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          {
+                            data:
+                              {
+                                type: object,
+                                properties: { organizationId: { type: string }, organizationSlug: { type: string } },
+                              },
+                          },
+                      },
+                  },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Expirée, close ou e-mail non vérifié }

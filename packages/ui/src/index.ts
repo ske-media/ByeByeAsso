@@ -1,10 +1,12 @@
 export * from "./components/badge";
 export * from "./components/button";
+export * from "./components/dialog";
 export * from "./components/form-field";
 export * from "./components/panel";
 export * from "./components/shells";
 export * from "./components/stat";
 export * from "./components/states";
+export * from "./components/table";
 export * from "./components/wordmark";
 export { cn } from "./lib/cn";
 export * from "./tokens";

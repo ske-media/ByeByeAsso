@@ -12,11 +12,13 @@
     "test": "vitest run --root . --passWithNoTests"
   },
   "dependencies": {
-    "@kroov/config": "workspace:*"
+    "@kroov/config": "workspace:*",
+    "nodemailer": "10.2.1"
   },
   "devDependencies": {
     "@kroov/config": "workspace:*",
     "@types/node": "22.20.5",
+    "@types/nodemailer": "8.0.2",
     "typescript": "5.9.3",
     "vitest": "4.1.12"
   }

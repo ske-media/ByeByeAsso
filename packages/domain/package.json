@@ -20,16 +20,20 @@
     "./analytics": "./src/analytics/index.ts",
     "./tasks": "./src/tasks/index.ts",
     "./billing": "./src/billing/index.ts",
-    "./audit": "./src/audit/index.ts"
+    "./audit": "./src/audit/index.ts",
+    "./authorization": "./src/authorization/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root . --passWithNoTests"
   },
   "dependencies": {
+    "@kroov/auth": "workspace:*",
     "@kroov/config": "workspace:*",
     "@kroov/database": "workspace:*",
+    "@kroov/notifications": "workspace:*",
     "@kroov/validation": "workspace:*",
+    "drizzle-orm": "0.45.4",
     "zod": "4.6.7"
   },
   "devDependencies": {

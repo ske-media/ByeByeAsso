@@ -1,8 +1,10 @@
 /**
  * organizations module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * Tenants, memberships, role grants, invitations. Every command authorises server-side
+ * through @kroov/auth and writes its audit entry in the same transaction.
  */
-export const MODULE_NAME = "organizations" as const;
+
+export * from "./invitations";
+export * from "./members";
+export * from "./organizations";
+export * from "./schemas";

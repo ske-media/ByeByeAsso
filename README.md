@@ -4,7 +4,7 @@
 
 Système d'exploitation événementiel multi-organisations (billetterie native, adhésions, bénévoles et planning intelligent, CRM, marketing). Marché initial : France.
 
-État : **Phase 0 — fondation** validée (voir `docs/phase-0-report.md`). Les phases suivantes sont décrites dans `docs/architecture.md`.
+État : **Phase 1 — identité et organisations** validée (`docs/phase-1-report.md`, après `docs/phase-0-report.md`). API : `docs/openapi.yaml`.
 
 ## Prérequis
 
@@ -26,27 +26,28 @@ Sans Docker : créez les bases `kroov` et `kroov_test` (utilisateur `kroov` / `k
 
 Pages utiles en développement :
 
-- `http://localhost:3000/` — accueil
+- `http://localhost:3000/` — accueil → inscription / connexion
+- `http://localhost:3000/organisations` — vos organisations (création, invitation de l'équipe)
 - `http://localhost:3000/api/v1/health` — état réel du service (base de données incluse)
 - `http://localhost:3000/design-system` — référence visuelle (404 en production)
 
 ## Commandes
 
-| Commande                      | Rôle                                                                                           |
-| ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| `pnpm lint` / `pnpm lint:fix` | Biome (lint + format)                                                                          |
-| `pnpm typecheck`              | `tsc --noEmit` sur chaque workspace                                                            |
-| `pnpm test:unit`              | tests unitaires (packages, apps)                                                               |
-| `pnpm test:integration`       | tests sur PostgreSQL réel (`DATABASE_URL_TEST`)                                                |
-| `pnpm test:security`          | tests négatifs (secrets, isolation)                                                            |
-| `pnpm test:e2e`               | Playwright (desktop 1440 px, mobile 390 px) ; `E2E_BASE_URL` pour cibler un serveur déjà lancé |
-| `pnpm build`                  | build de production (Next.js + typecheck worker)                                               |
-| `pnpm validate`               | lint + typecheck + unit + build                                                                |
-| `pnpm db:generate`            | génère une migration SQL depuis le schéma Drizzle                                              |
-| `pnpm db:migrate`             | applique les migrations                                                                        |
-| `pnpm db:check`               | vérifie la cohérence schéma / migrations                                                       |
-| `pnpm db:reset`               | **dev uniquement** : recrée la base locale et migre                                            |
-| `pnpm secrets:scan`           | recherche de secrets commités                                                                  |
+| Commande                      | Rôle                                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `pnpm lint` / `pnpm lint:fix` | Biome (lint + format)                                                                                     |
+| `pnpm typecheck`              | `tsc --noEmit` sur chaque workspace                                                                       |
+| `pnpm test:unit`              | tests unitaires (packages, apps)                                                                          |
+| `pnpm test:integration`       | tests sur PostgreSQL réel (`DATABASE_URL_TEST`)                                                           |
+| `pnpm test:security`          | tests négatifs ; avec `E2E_BASE_URL` : isolation tenant par API directe (voir `tests/security/README.md`) |
+| `pnpm test:e2e`               | Playwright (desktop 1440 px, mobile 390 px) ; `E2E_BASE_URL` pour cibler un serveur déjà lancé            |
+| `pnpm build`                  | build de production (Next.js + typecheck worker)                                                          |
+| `pnpm validate`               | lint + typecheck + unit + build                                                                           |
+| `pnpm db:generate`            | génère une migration SQL depuis le schéma Drizzle                                                         |
+| `pnpm db:migrate`             | applique les migrations                                                                                   |
+| `pnpm db:check`               | vérifie la cohérence schéma / migrations                                                                  |
+| `pnpm db:reset`               | **dev uniquement** : recrée la base locale et migre                                                       |
+| `pnpm secrets:scan`           | recherche de secrets commités                                                                             |
 
 ## Structure
 
@@ -55,6 +56,10 @@ Voir `docs/architecture.md` (vue d'ensemble, règles de dépendance entre module
 ## Variables d'environnement
 
 Toutes les variables sont déclarées et validées dans `packages/config/src/env.ts`. Le fichier `.env` vit à la racine du dépôt ; les variables déjà présentes dans le processus (CI, hébergeur) ont priorité. Les valeurs vides signifient « non configuré ». Aucun secret n'a de valeur par défaut.
+
+## E-mails en local
+
+`EMAIL_PROVIDER=console` affiche les liens (vérification, réinitialisation, invitation) dans la console du serveur ; `smtp` les envoie à Mailpit (`http://localhost:8025`) ; `file` les écrit en JSON lines (`EMAIL_FILE_PATH`) pour les tests. `console` et `file` sont refusés en production et préproduction (`APP_ENV`).
 
 ## Données de démonstration
 

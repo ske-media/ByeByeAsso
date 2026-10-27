@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Authentication (sessions, credentials, magic links) and the server-side authorization kernel (RBAC, tenant isolation).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./catalogue": "./src/catalogue.ts",
+    "./server": "./src/server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -13,7 +15,10 @@
   },
   "dependencies": {
     "@kroov/config": "workspace:*",
-    "@kroov/domain": "workspace:*"
+    "@kroov/database": "workspace:*",
+    "@kroov/notifications": "workspace:*",
+    "better-auth": "1.7.14",
+    "drizzle-orm": "0.45.4"
   },
   "devDependencies": {
     "@kroov/config": "workspace:*",

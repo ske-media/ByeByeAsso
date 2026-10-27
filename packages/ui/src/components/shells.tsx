@@ -22,6 +22,7 @@ export interface ShellLinkProps {
   children?: React.ReactNode;
   "aria-current"?: "page" | undefined;
   "aria-label"?: string;
+  onClick?: () => void;
 }
 export type ShellLink = React.ComponentType<ShellLinkProps>;
 
@@ -68,7 +69,8 @@ export function OrganizationShell({
           "fixed inset-y-0 left-0 z-40 w-sidebar border-r border-border bg-sidebar px-[17px] py-[30px]",
           "flex flex-col transition-transform duration-ui ease-ui",
           "lg:translate-x-0",
-          open ? "translate-x-0" : "-translate-x-full",
+          // Closed drawer: off-canvas AND invisible below lg, so it leaves the a11y tree and tab order.
+          open ? "translate-x-0" : "-translate-x-full max-lg:invisible",
         )}
         aria-label="Navigation de l'organisation"
       >
@@ -91,6 +93,7 @@ export function OrganizationShell({
                 <LinkComponent
                   href={item.href}
                   aria-current={item.active ? "page" : undefined}
+                  onClick={() => setOpen(false)}
                   className={cn(
                     "my-[3px] flex min-h-touch items-center gap-[11px] rounded-control px-[11px] py-3 text-[12px] whitespace-nowrap",
                     item.active ? "bg-lime font-bold text-ink" : "text-[#51554b] hover:bg-ink/5",
