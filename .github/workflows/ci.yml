@@ -83,17 +83,17 @@ jobs:
       - run: pnpm db:migrate
       - run: pnpm --filter @kroov/web build
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Start web (test policy, file mailbox)
-        run: |
-          (cd apps/web && APP_ENV=test EMAIL_PROVIDER=file EMAIL_FILE_PATH=$GITHUB_WORKSPACE/.tmp/outbox.jsonl pnpm exec next start --port 3000 > ../../web.log 2>&1 &)
-          for i in $(seq 1 30); do curl -sf http://localhost:3000/api/v1/health && break; sleep 2; done
+      - name: Start web + worker (test policy, file mailbox)
+        run: EMAIL_FILE_PATH=$GITHUB_WORKSPACE/.tmp/outbox.jsonl scripts/test-server.sh start
       - name: Security tests (direct API, forged ids)
         run: E2E_BASE_URL=http://localhost:3000 EMAIL_FILE_PATH=$GITHUB_WORKSPACE/.tmp/outbox.jsonl pnpm test:security
       - name: End-to-end (Playwright)
         run: E2E_BASE_URL=http://localhost:3000 EMAIL_FILE_PATH=$GITHUB_WORKSPACE/.tmp/outbox.jsonl pnpm test:e2e
-      - name: Server log
+      - name: Server logs
         if: failure()
-        run: tail -200 web.log
+        run: |
+          echo "== web"; tail -200 .tmp/web-start.log || true
+          echo "== worker"; tail -100 .tmp/worker-start.log || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
