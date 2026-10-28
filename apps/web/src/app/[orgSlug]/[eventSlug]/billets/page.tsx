@@ -87,6 +87,7 @@ export default async function PublicTicketsPage({
                 available: t.available,
                 saleState: t.saleState,
                 salesStartLabel: t.salesStartAt ? formatDateFr(t.salesStartAt, event.timezone) : null,
+                membersOnly: t.membersOnly,
               }))}
             />
           )}

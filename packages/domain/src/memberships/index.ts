@@ -1,8 +1,9 @@
 /**
- * memberships module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * memberships module — public API (phase 4): plans, applications, memberships, member card,
+ * payment via the shared provider port, expiry and renewal reminders, ticket eligibility.
  */
 export const MODULE_NAME = "memberships" as const;
+export * from "./memberships";
+export * from "./plans";
+export * from "./schemas";
+export * from "./state-machine";

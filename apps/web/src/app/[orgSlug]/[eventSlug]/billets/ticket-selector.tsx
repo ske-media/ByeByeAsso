@@ -1,6 +1,6 @@
 "use client";
 
-import { Alert, Button, Panel } from "@kroov/ui";
+import { Alert, Button, FormField, Input, Panel } from "@kroov/ui";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { fmtMinor } from "@/lib/money";
@@ -16,6 +16,7 @@ export interface SelectableType {
   available: number | null;
   saleState: "upcoming" | "on_sale" | "ended" | "sold_out";
   salesStartLabel: string | null;
+  membersOnly: boolean;
 }
 
 /** Écran 28 — Choix des billets : quantités, disponibilité, frais annoncés, total. */
@@ -36,6 +37,8 @@ export function TicketSelector({
   const [qty, setQty] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [memberEmail, setMemberEmail] = useState("");
+  const needsMemberEmail = types.some((t) => t.membersOnly && (qty[t.id] ?? 0) > 0);
   const total = useMemo(() => {
     let subtotal = 0;
     let fees = 0;
@@ -70,12 +73,21 @@ export function TicketSelector({
       setError(`Au plus ${maxTicketsPerOrder} billets par commande.`);
       return;
     }
+    if (needsMemberEmail && !memberEmail.trim()) {
+      setError("Indiquez l'e-mail de votre adhésion pour les tarifs réservés aux adhérents.");
+      return;
+    }
     setPending(true);
     try {
       const res = await fetch("/api/v1/public/orders", {
         method: "POST",
         headers: { "content-type": "application/json", "x-requested-with": "kroov" },
-        body: JSON.stringify({ organizationSlug, eventSlug, items }),
+        body: JSON.stringify({
+          organizationSlug,
+          eventSlug,
+          items,
+          ...(needsMemberEmail ? { email: memberEmail.trim() } : {}),
+        }),
       });
       const json = (await res.json()) as { data?: { id: string; accessToken: string }; error?: { message?: string } };
       if (!res.ok || !json.data) {
@@ -100,7 +112,14 @@ export function TicketSelector({
           <Panel key={t.id} className={disabled ? "opacity-70" : n > 0 ? "border-ink bg-[#fbffe0]" : ""}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h2 className="text-panel-title font-bold">{t.name}</h2>
+                <h2 className="text-panel-title font-bold">
+                  {t.name}
+                  {t.membersOnly ? (
+                    <span className="ml-2 inline-block rounded-[5px] bg-lavender px-2 py-0.5 align-middle text-[10px] font-bold uppercase">
+                      Réservé aux adhérents
+                    </span>
+                  ) : null}
+                </h2>
                 {t.description ? <p className="text-[12px] text-muted">{t.description}</p> : null}
                 <p className="mt-2 text-[15px] font-bold">
                   {t.priceMinor === 0 ? "Gratuit" : fmtMinor(t.priceMinor, currency)}
@@ -187,6 +206,25 @@ export function TicketSelector({
           </dl>
         )}
       </Panel>
+      {needsMemberEmail ? (
+        <Panel>
+          <h2 className="text-panel-title font-bold">Tarif adhérent</h2>
+          <p className="text-[12px] text-muted">
+            Votre adhésion est vérifiée à cette adresse avant la réservation. Elle devra aussi être l'adresse de la
+            commande.
+          </p>
+          <FormField label="E-mail de votre adhésion" required className="mt-2">
+            <Input
+              type="email"
+              name="memberEmail"
+              autoComplete="email"
+              value={memberEmail}
+              onChange={(e) => setMemberEmail(e.target.value)}
+              placeholder="vous@exemple.fr"
+            />
+          </FormField>
+        </Panel>
+      ) : null}
       {error ? <Alert tone="error">{error}</Alert> : null}
       <p className="rounded-[9px] bg-lavender px-3 py-2 text-[12px]">
         Vos places seront réservées pendant 10 minutes à l'étape suivante.

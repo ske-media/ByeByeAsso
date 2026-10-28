@@ -148,6 +148,16 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Contrôle d'accès : page dédiée `/controle/[slug]/[eventSlug]` (coque `CheckInShell`, caméra via `BarcodeDetector` + saisie manuelle), API `checkins` ; admission par `UPDATE … WHERE status = 'valid'` + index unique partiel.
 - Ledger en partie double par organisation (`receivable_provider`, `revenue_tickets`, `platform_fees`), alimenté à chaque paiement et remboursement ; lecture en phase 7.
 
+## 7quinquies. Adhésions (phase 4)
+
+- Domaine `packages/domain/src/memberships` : `schemas.ts`, `state-machine.ts` (machine `pending → awaiting_payment | active → suspended ↔ active → expired | cancelled`, `computeValidity` : période fixe = fenêtre de la formule, glissante = N mois à partir de l'activation ou de la fin de l'adhésion précédente), `plans.ts` (formules, avantages, compteurs de quota), `memberships.ts` (candidature, approbation/refus, checkout, activation **par webhook uniquement**, renouvellement lié, suspension/réactivation/annulation/prolongation motivée, lectures organisateur et adhérent, jobs d'expiration et de rappel), `emails.ts`.
+- Les adhésions appartiennent à l'organisation, jamais à un événement. Une seule adhésion active par personne et organisation : index uniques partiels sur `(organization_id, member_email)` et `(organization_id, user_id)` — un webhook rejoué ou une double activation ne peut pas en créer deux.
+- Paiement : `payments` est polymorphe (`order_id` **ou** `membership_id`, `CHECK` exclusif) ; `processProviderEvent` route `payment.succeeded` vers `markOrderPaid` ou `activateMembershipFromPayment` selon la cible. Frais de service identiques aux billets (`PLATFORM_FEE_*`), à la charge de l'adhérent et affichés avant paiement.
+- Jeton adhérent dérivé `HMAC(AUTH_SECRET, "membership-access":id:version)`, jamais stocké (SHA-256 seulement) ; le renvoi incrémente `secret_version` et révoque l'ancien lien. L'adhérent connecté (même `user_id` ou même e-mail vérifié) accède sans jeton ; sinon 404 uniforme.
+- Éligibilité billets : `ticket_types.members_only` est vérifié côté serveur à la réservation (e-mail obligatoire), au changement de coordonnées et au checkout (`hasActiveMembership` sur l'e-mail de la commande). Une suspension retire le privilège immédiatement.
+- Historique `membership_validity_changes` append-only (activation, prolongation, suspension, réactivation, expiration, annulation, renouvellement) avec acteur et motif ; chaque transition écrit aussi l'audit dans la même transaction.
+- Jobs worker : `memberships.expire` (quotidien 03:10 UTC) et `memberships.remind` (quotidien 08:40 UTC, rappel J-30 envoyé une seule fois grâce à `reminder_sent_at`, uniquement si une formule publique active permet de renouveler). Pas de renouvellement automatique : la personne choisit (écran 47), la nouvelle adhésion est liée par `renewed_from` et l'ancienne passe en `expired` à l'activation de la nouvelle.
+
 ## 8. Sécurité (fondation)
 
 - Environnement validé au démarrage (`packages/config/src/env.ts`) : échec explicite, chaînes vides = non configuré, secrets sans valeur par défaut.

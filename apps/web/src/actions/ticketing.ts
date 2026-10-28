@@ -76,6 +76,7 @@ function ticketTypeFromForm(values: Record<string, string>, timezone: string) {
       minPerOrder: Number(values.minPerOrder || 1),
       maxPerOrder: Number(values.maxPerOrder || 10),
       hidden: values.hidden === "on",
+      membersOnly: values.membersOnly === "on",
       position: Number(values.position || 0),
       poolId: values.poolId && values.poolId !== "none" ? values.poolId : null,
     },

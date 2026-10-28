@@ -438,6 +438,32 @@ describe("D. checkout, webhooks, issuance", () => {
     await expect(applyPromoCode(handle.db, ctx, o.id, o.accessToken, "INCONNU")).rejects.toMatchObject({
       details: { code: "promo_invalid" },
     });
+    // The cap (1 redemption) counts PAID orders only: pay this one, then a second order is refused.
+    await updateBuyerDetails(handle.db, ctx, o.id, o.accessToken, {
+      email: "promo@example.fr",
+      firstName: "Pro",
+      lastName: "Mo",
+      attendees: [{ ticketTypeId: standard, names: ["Pro Mo"] }],
+    });
+    const promoCheckout = await startCheckout(handle.db, ctx, anon, o.id, o.accessToken, {
+      successUrl: "x",
+      cancelUrl: "y",
+    });
+    if (promoCheckout.kind !== "redirect") throw new Error("expected redirect");
+    expect(await webhook("payment.succeeded", promoCheckout.url.split("/paiement/")[1]!)).toBe("applied");
+    const second = await createPublicOrder(handle.db, ctx, anon, {
+      organizationSlug: DEMO.organization.slug,
+      eventSlug: eventA.slug,
+      items: [{ ticketTypeId: early, quantity: 1 }],
+    });
+    await expect(applyPromoCode(handle.db, ctx, second.id, second.accessToken, "NUIT-10")).rejects.toMatchObject({
+      details: { code: "promo_exhausted" },
+    });
+    await handle.db
+      .update(schema.orders)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(schema.orders.id, second.id));
+    await expireOverdueOrders(handle.db, system);
     // Free (hidden) type: paid at once, tickets valid, confirmation sent, no payment row.
     const f = await createPublicOrder(handle.db, ctx, anon, {
       organizationSlug: DEMO.organization.slug,
@@ -492,11 +518,11 @@ describe("D. checkout, webhooks, issuance", () => {
     expect(v.tickets.filter((t) => t.status === "valid")).toHaveLength(1);
     expect(v.tickets.filter((t) => t.status === "revoked")).toHaveLength(1);
     // Order 2: late, but meanwhile the pool got full → automatic refund, order stays expired.
-    // State: standard sold 2 (paid order), early sold 1 → pool 3/6, early 2 left, standard 3 left.
+    // State: standard sold 3 (paid order 2 + promo order 1), early sold 1 → pool 4/6, early 2 left, standard 2 left.
     const filler = await createPublicOrder(handle.db, ctx, anon, {
       organizationSlug: DEMO.organization.slug,
       eventSlug: eventA.slug,
-      items: [{ ticketTypeId: early, quantity: 2 }],
+      items: [{ ticketTypeId: early, quantity: 1 }],
     });
     void filler; // pool 5/6
     const late2 = await createPublicOrder(handle.db, ctx, anon, {
@@ -643,9 +669,9 @@ describe("D. checkout, webhooks, issuance", () => {
     // Only the duplicate-payment refund (no ledger) and the two refunds on the paid order: receivable back to the free/late orders' amounts.
     expect(balances.revenue_tickets).toBeLessThanOrEqual(0);
     expect(Object.values(balances).reduce((a, b) => a + b, 0)).toBe(0);
-    // Seats are released: standard availability grew back.
+    // Seats are released: only the promo order's ticket remains sold on this type.
     const types = await listTicketTypes(handle.db, camille.actor, orgA, eventA.id);
-    expect(types.find((t) => t.id === standard)?.sold).toBe(0);
+    expect(types.find((t) => t.id === standard)?.sold).toBe(1);
   });
 
   it("tenant isolation on orders: B cannot read or list A's orders; scoped reads are 404", async () => {

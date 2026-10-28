@@ -37,6 +37,16 @@ erDiagram
   orders ||--o| promo_redemptions : "applies"
   organizations ||--o{ payment_accounts : "connected at"
   orders ||--o{ payments : "paid by"
+  organizations ||--o{ membership_plans : offers
+  membership_plans ||--o{ membership_plan_benefits : lists
+  membership_plans ||--o{ membership_applications : "applied to"
+  membership_applications ||--o| memberships : "becomes"
+  membership_plans ||--o{ memberships : "subscribed as"
+  memberships ||--o| memberships : "renewed_from"
+  memberships ||--o{ membership_entitlements : grants
+  memberships ||--o{ membership_validity_changes : "history (append-only)"
+  memberships ||--o{ payments : "cotisation paid by"
+  users |o--o{ memberships : "attached to (optional)"
   payments ||--o{ payment_attempts : "attempted"
   orders ||--o{ refunds : "refunded by"
   payments ||--o{ refunds : "reverses"
@@ -358,7 +368,8 @@ erDiagram
   }
   payments {
     uuid id PK
-    uuid order_id FK
+    uuid order_id FK "nullable"
+    uuid membership_id FK "nullable"
     payment_provider provider
     text provider_ref
     text provider_charge_ref
@@ -424,6 +435,90 @@ erDiagram
     text reference
     uuid order_id FK
   }
+  membership_plans {
+    uuid id PK
+    uuid organization_id FK
+    text slug
+    text name
+    integer price_minor
+    text currency
+    membership_period_kind period_kind
+    timestamptz valid_from
+    timestamptz valid_until
+    integer duration_months
+    boolean requires_review
+    integer max_members
+    boolean public
+    integer position
+    membership_plan_status status
+  }
+  membership_plan_benefits {
+    uuid id PK
+    uuid organization_id FK
+    uuid plan_id FK
+    text label
+    integer position
+  }
+  membership_applications {
+    uuid id PK
+    uuid organization_id FK
+    uuid plan_id FK
+    text email
+    text first_name
+    text last_name
+    uuid user_id FK
+    boolean marketing_opt_in
+    membership_application_status status
+    text rejection_reason
+    timestamptz reviewed_at
+  }
+  memberships {
+    uuid id PK
+    uuid organization_id FK
+    uuid plan_id FK
+    uuid application_id FK
+    text number "M-0001 par organisation"
+    text member_email
+    text member_first_name
+    text member_last_name
+    uuid user_id FK
+    membership_status status
+    timestamptz valid_from
+    timestamptz valid_until
+    uuid renewed_from FK
+    integer price_minor
+    text currency
+    text access_token_hash
+    integer secret_version
+    timestamptz activated_at
+    timestamptz suspended_at
+    timestamptz expired_at
+    timestamptz cancelled_at
+    text cancellation_reason
+    timestamptz reminder_sent_at
+    integer version
+  }
+  membership_entitlements {
+    uuid id PK
+    uuid organization_id FK
+    uuid membership_id FK
+    text kind
+    text key
+    timestamptz valid_from
+    timestamptz valid_until
+  }
+  membership_validity_changes {
+    uuid id PK
+    uuid organization_id FK
+    uuid membership_id FK
+    text kind
+    timestamptz previous_valid_until
+    timestamptz new_valid_from
+    timestamptz new_valid_until
+    text reason
+    text actor
+    timestamptz created_at
+  }
   outbox_events {
     uuid id PK
     text aggregate_type
@@ -476,6 +571,11 @@ erDiagram
 | `stored_files`                                        | `UNIQUE (bucket, object_key)`, `CHECK mime_type ~ '^[a-z]+/[a-z0-9.+-]+$'`                                                                                                                                                                  | un objet de stockage référencé une fois                                                             |
 | `form_*`                                              | `UNIQUE (form_id, key)`, `UNIQUE (form_id, subject_type, subject_id)`, `UNIQUE (submission_id, field_id)`, FK composites                                                                                                                    | formulaires dynamiques cohérents par tenant (servis en phases 3/5)                                  |
 | `audit_logs`                                          | `CHECK actor_kind IN (…)`, `CHECK action ~ '^[a-z_]+\.[a-z_]+$'`                                                                                                                                                                            | journal structuré                                                                                   |
+| `membership_plans`                                    | `UNIQUE (organization_id, slug)`, `CHECK period` (fixe : dates cohérentes ; glissante : 1–60 mois), `CHECK price_minor >= 0`                                                                                                                | une formule par adresse et organisation ; période toujours exploitable                              |
+| `memberships`                                         | `UNIQUE (organization_id, member_email) WHERE status = 'active'`, `UNIQUE (organization_id, user_id) WHERE status = 'active' AND user_id IS NOT NULL`                                                                                       | **une seule adhésion active par personne et organisation** (doublon de webhook inclus)              |
+| `memberships`                                         | `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK active_has_validity`, `CHECK cancel_reason`, FK composite `renewed_from → memberships (organization_id, id)`                                                       | numéros stables, jeton unique, pas d'adhésion active sans dates, renouvellement intra-organisation  |
+| `membership_validity_changes`                         | aucune mise à jour ni suppression (append-only par le domaine), `CHECK kind ~ '^[a-z_]+$'`                                                                                                                                                  | historique de validité inaltérable                                                                  |
+| `payments`                                            | `order_id` nullable, `membership_id` nullable, `CHECK payments_target_exclusive` (exactement une cible)                                                                                                                                     | un paiement règle une commande **ou** une cotisation, jamais les deux ni aucune                     |
 | infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                    | idempotence, relais, surcharge par organisation                                                     |
 
 Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).

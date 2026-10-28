@@ -120,6 +120,7 @@ export default async function TicketsConfigPage({ params }: { params: Promise<{ 
                 minPerOrder: t.minPerOrder,
                 maxPerOrder: t.maxPerOrder,
                 hidden: t.hidden,
+                membersOnly: t.membersOnly,
                 position: t.position,
                 status: t.status,
                 poolId: t.poolId,

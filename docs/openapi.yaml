@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.3.0-phase3
+  version: 0.4.0-phase4
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -18,6 +18,11 @@ info:
     (`?k=` ou `Authorization: Bearer`), renvoyé UNE fois à la réservation ; toute erreur d'accès est un 404.
     Les billets ne sont émis que par `POST /payments/webhooks/{provider}` (signature vérifiée, idempotent) ou
     pour une commande gratuite — jamais sur la redirection de retour du prestataire.
+
+    Adhésions (phase 4) : les formules et adhésions appartiennent à l'organisation (`memberships.manage`).
+    Les routes `/public/memberships/*` sont authentifiées par le jeton d'accès adhérent (`?k=` ou Bearer),
+    renvoyé UNE fois à la demande ; l'activation d'une cotisation payante ne vient que du webhook signé.
+    Un tarif `membersOnly` exige une adhésion active sur l'e-mail de la commande (412 `membership_required`).
 
     Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
     Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
@@ -248,6 +253,11 @@ components:
         minPerOrder: { type: integer }
         maxPerOrder: { type: integer }
         hidden: { type: boolean }
+        membersOnly:
+          {
+            type: boolean,
+            description: "réservé aux adhérents actifs (vérifié à la réservation, aux coordonnées et au paiement)",
+          }
         position: { type: integer }
         status: { type: string, enum: [active, archived] }
         poolId: { type: [string, "null"] }
@@ -411,6 +421,7 @@ components:
         description: { type: [string, "null"] }
         priceMinor: { type: integer }
         unitFeeMinor: { type: integer, description: "frais acheteur par billet, annoncés avant paiement" }
+        membersOnly: { type: boolean }
         currency: { type: string }
         minPerOrder: { type: integer }
         maxPerOrder: { type: integer }
@@ -486,6 +497,149 @@ components:
         reason: { type: [string, "null"] }
         metadata: { type: object }
         createdAt: { type: string, format: date-time }
+    MembershipPlan:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        priceMinor:
+          { type: integer, minimum: 0, description: "0 = adhésion gratuite (activation immédiate à l'approbation)" }
+        currency: { type: string }
+        periodKind: { type: string, enum: [fixed, rolling] }
+        validFrom: { type: [string, "null"], format: date-time, description: période fixe }
+        validUntil: { type: [string, "null"], format: date-time, description: période fixe }
+        durationMonths: { type: [integer, "null"], description: période glissante }
+        requiresReview: { type: boolean }
+        maxMembers: { type: [integer, "null"] }
+        public: { type: boolean }
+        position: { type: integer }
+        status: { type: string, enum: [active, archived] }
+        benefits: { type: array, items: { type: string } }
+        taken: { type: integer, description: "actives + en cours (compte dans le quota)" }
+        activeMembers: { type: integer }
+    MembershipPlanInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        priceMinor: { type: integer, minimum: 0 }
+        periodKind: { type: string, enum: [fixed, rolling] }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+        durationMonths: { type: integer, minimum: 1, maximum: 60 }
+        requiresReview: { type: boolean }
+        maxMembers: { type: [integer, "null"] }
+        public: { type: boolean }
+        position: { type: integer }
+        benefits: { type: array, items: { type: string }, maxItems: 12 }
+    Membership:
+      type: object
+      description: Vue organisateur d'une adhésion (jamais de jeton ni de hash).
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        organizationName: { type: string }
+        organizationSlug: { type: string }
+        number: { type: string, example: M-0001 }
+        status: { type: string, enum: [pending, awaiting_payment, active, rejected, suspended, expired, cancelled] }
+        plan:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            slug: { type: string }
+            periodKind: { type: string, enum: [fixed, rolling] }
+            requiresReview: { type: boolean }
+        member:
+          type: object
+          properties:
+            email: { type: string }
+            firstName: { type: string }
+            lastName: { type: string }
+            userId: { type: [string, "null"] }
+        priceMinor: { type: integer }
+        feesMinor: { type: integer, description: frais de service annoncés avant paiement }
+        currency: { type: string }
+        validFrom: { type: [string, "null"], format: date-time }
+        validUntil: { type: [string, "null"], format: date-time }
+        renewedFrom: { type: [string, "null"], format: uuid }
+        renewedBy: { type: [string, "null"], format: uuid }
+        activatedAt: { type: [string, "null"], format: date-time }
+        cancellationReason: { type: [string, "null"] }
+        application:
+          type: [object, "null"]
+          properties:
+            id: { type: string }
+            status: { type: string, enum: [submitted, approved, rejected, withdrawn] }
+            rejectionReason: { type: [string, "null"] }
+            reviewedAt: { type: [string, "null"], format: date-time }
+        payment:
+          type: [object, "null"]
+          properties:
+            id: { type: string }
+            status: { type: string }
+            methodLabel: { type: [string, "null"] }
+            amountMinor: { type: integer }
+        validityChanges:
+          type: array
+          description: Historique append-only des changements de validité.
+          items:
+            type: object
+            properties:
+              at: { type: string, format: date-time }
+              kind: { type: string, enum: [activated, extended, suspended, reactivated, expired, cancelled, renewed] }
+              newValidFrom: { type: [string, "null"], format: date-time }
+              newValidUntil: { type: [string, "null"], format: date-time }
+              reason: { type: [string, "null"] }
+              actor: { type: string }
+        marketingOptIn: { type: boolean }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+    MemberMembership:
+      allOf:
+        - { $ref: "#/components/schemas/Membership" }
+        - type: object
+          properties:
+            accessToken: { type: string, description: "Jeton d'accès adhérent (dérivé, jamais stocké)." }
+            renewalPlans:
+              type: array
+              description: Formules proposées au renouvellement (fenêtre J-60 → +365 j, places restantes).
+              items: { $ref: "#/components/schemas/MembershipPlan" }
+    MembershipListItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        status: { type: string }
+        memberName: { type: string }
+        memberEmail: { type: string }
+        planName: { type: string }
+        validFrom: { type: [string, "null"], format: date-time }
+        validUntil: { type: [string, "null"], format: date-time }
+        memberSince: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    MembershipStats:
+      type: object
+      properties:
+        active: { type: integer }
+        toRenew: { type: integer, description: actives expirant sous 30 jours }
+        pending: { type: integer }
+        duesMinor: { type: integer, description: cotisations des adhésions actives, hors frais }
+        currency: { type: string }
+    MembershipApplicationInput:
+      type: object
+      required: [planId, email, firstName, lastName]
+      properties:
+        planId: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        marketingOptIn: { type: boolean }
   responses:
     Unauthenticated:
       {
@@ -1552,6 +1706,241 @@ paths:
               },
           }
         "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/membership-plans:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Lister les formules (compteurs de quota)
+      description: "`memberships.manage`."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/MembershipPlan" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Créer une formule
+      description: Période fixe (validFrom/validUntil) ou glissante (durationMonths). Slug dérivé du nom si absent.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MembershipPlanInput" } } }
+      responses:
+        "201": { description: Créée }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Identifiant de formule déjà utilisé }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/membership-plans/{planId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail d'une formule
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Modifier une formule
+      description: 412 si archivée. Les adhésions existantes gardent leur validité.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MembershipPlanInput" } } }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Formule archivée }
+    delete:
+      summary: Archiver une formule
+      description: Retirée de la page publique ; plus aucune demande acceptée.
+      responses:
+        "204": { description: Archivée }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/memberships:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: status,
+          in: query,
+          schema:
+            {
+              type: string,
+              enum: [all, pending, awaiting_payment, active, suspended, expired, rejected, cancelled, to_renew],
+            },
+        }
+      - { name: planId, in: query, schema: { type: string, format: uuid } }
+      - { name: q, in: query, schema: { type: string }, description: nom, e-mail ou numéro }
+    get:
+      summary: Lister les adhésions + indicateurs
+      description: "`memberships.manage`. `to_renew` = actives expirant sous 30 jours."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          {
+                            data:
+                              {
+                                type: object,
+                                properties:
+                                  {
+                                    memberships:
+                                      { type: array, items: { $ref: "#/components/schemas/MembershipListItem" } },
+                                    stats: { $ref: "#/components/schemas/MembershipStats" },
+                                  },
+                              },
+                          },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /organizations/{organizationId}/memberships/{membershipId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: membershipId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail d'une adhésion (demande, paiement, historique de validité)
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Membership" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/memberships/{membershipId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: membershipId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: action,
+          in: path,
+          required: true,
+          schema: { type: string, enum: [approve, reject, suspend, reactivate, cancel, extend, resend] },
+        }
+    post:
+      summary: Décision sur une adhésion
+      description: |
+        `approve` : pending → active (gratuite) ou awaiting_payment (payante, lien de paiement envoyé).
+        `reject` / `suspend` / `cancel` : corps `{ reason }` (3–500 caractères), transmis à la personne.
+        `reactivate` : suspended → active. `extend` : `{ validUntil, reason }`, tracé dans l'historique.
+        `resend` : nouveau lien (l'ancien est révoqué par incrément de `secret_version`), 204.
+        Toute transition illégale → 412 `invalid_transition`. Audit dans la même transaction.
+      requestBody:
+        required: false
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        "200": { description: OK }
+        "204": { description: Lien renvoyé }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Transition impossible }
+        "422": { $ref: "#/components/responses/Validation" }
+  /public/organizations/{slug}/membership-plans:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Formules publiques d'une organisation
+      security: []
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/organizations/{slug}/membership-applications:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Demander une adhésion (sans compte)
+      description: |
+        Renvoie l'adhésion avec son `accessToken` — seule réponse qui le contient. Formule gratuite sans
+        revue : active immédiatement. 409 `membership_exists` (déjà active pour cet e-mail) /
+        `application_in_progress` · 412 `plan_full`.
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MembershipApplicationInput" } } }
+      responses:
+        "201":
+          {
+            description: Demande enregistrée,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/MemberMembership" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Adhésion ou demande existante }
+        "412": { description: Formule complète }
+        "422": { $ref: "#/components/responses/Validation" }
+  /public/memberships/{membershipId}:
+    parameters:
+      - { name: membershipId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: k,
+          in: query,
+          schema: { type: string },
+          description: Jeton d'accès adhérent (ou Authorization Bearer,
+          ou compte propriétaire),
+        }
+    get:
+      summary: Carte d'adhérent (vue adhérent)
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/MemberMembership" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/memberships/{membershipId}/checkout:
+    parameters:
+      - { name: membershipId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, required: true, schema: { type: string } }
+    post:
+      summary: Régler la cotisation (page hébergée)
+      description: "`awaiting_payment` uniquement (412 `not_awaiting_payment`). L'activation vient du webhook."
+      security: []
+      responses:
+        "200": { description: "`{ kind: redirect, url, paymentId }` ou `{ kind: active }`" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Pas de paiement attendu / compte de paiement indisponible }
+  /public/memberships/{membershipId}/renew:
+    parameters:
+      - { name: membershipId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, required: true, schema: { type: string } }
+    post:
+      summary: Renouveler (nouvelle adhésion liée)
+      description: |
+        Corps `{ planId }` parmi `renewalPlans`. Mêmes règles de revue et de paiement ; la nouvelle période
+        démarre à la fin de l'actuelle (formule glissante). 412 `already_renewed`.
+      security: []
+      responses:
+        "201": { description: Nouvelle adhésion (avec son accessToken) }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Déjà renouvelée }
   /payments/webhooks/{provider}:
     parameters:
       - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, fake] } }

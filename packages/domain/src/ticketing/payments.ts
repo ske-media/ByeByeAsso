@@ -4,6 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
 import { type Actor, NotFoundError, PreconditionFailedError } from "../kernel";
+import { activateMembershipFromPayment, notifyMembershipActivated } from "../memberships/memberships";
 import type { ProviderEvent } from "../payments/port";
 import { deriveToken, type TicketingContext, TOKEN_SCOPES } from "./context";
 import { sendLatePaymentRefunded, sendOrderConfirmation, sendPaymentFailed } from "./emails";
@@ -271,11 +272,30 @@ async function onPaymentSucceeded(
     ): Promise<{
       outcome: WebhookOutcome;
       orderId: string | null;
+      membershipId?: string | undefined;
       refundAmount?: number | undefined;
       chargeRef?: string | undefined;
     }> => {
       const payment = await findPayment(tx, ctx.provider.name, event.providerObjectId);
       if (!payment) return { outcome: "ignored_unknown", orderId: null };
+      if (payment.membershipId) {
+        // Cotisation: activate the membership (same idempotency and ordering rules).
+        if (["succeeded", "partially_refunded", "refunded"].includes(payment.status))
+          return { outcome: "duplicate", orderId: null };
+        paymentStateMachine.transition(payment.status, "succeeded", { actor: actor.kind });
+        await tx
+          .update(schema.payments)
+          .set({
+            status: "succeeded",
+            succeededAt: event.occurredAt,
+            providerChargeRef: event.chargeRef ?? payment.providerChargeRef,
+            methodLabel: event.methodLabel ?? payment.methodLabel,
+          })
+          .where(eq(schema.payments.id, payment.id));
+        const applied = await activateMembershipFromPayment(tx, actor, payment.membershipId, event.occurredAt);
+        return { outcome: applied, orderId: null, membershipId: payment.membershipId };
+      }
+      if (!payment.orderId) return { outcome: "ignored_unknown", orderId: null };
       const order = await lockOrder(tx, payment.orderId);
       if (["succeeded", "partially_refunded", "refunded"].includes(payment.status))
         return { outcome: "duplicate", orderId: order.id };
@@ -335,6 +355,14 @@ async function onPaymentSucceeded(
       }
     },
   );
+  if (result.membershipId && result.outcome === "applied") {
+    await notifyMembershipActivated(db, ctx, result.membershipId);
+    return result.outcome;
+  }
+  if (result.membershipId && result.outcome === "applied") {
+    await notifyMembershipActivated(db, ctx, result.membershipId);
+    return result.outcome;
+  }
   if (!result.orderId) return result.outcome;
   if (result.outcome === "applied") {
     const secret = await db
@@ -467,6 +495,19 @@ async function onPaymentFailed(
   const result = await db.transaction(async (tx): Promise<{ outcome: WebhookOutcome; orderId: string | null }> => {
     const payment = await findPayment(tx, ctx.provider.name, event.providerObjectId);
     if (!payment) return { outcome: "ignored_unknown", orderId: null };
+    if (!payment.orderId) {
+      // Membership cotisation refused: the membership simply keeps waiting for a new attempt.
+      if (["succeeded", "partially_refunded", "refunded"].includes(payment.status))
+        return { outcome: "ignored_out_of_order", orderId: null };
+      const next = event.type === "payment.cancelled" ? "cancelled" : "failed";
+      if (payment.status === next) return { outcome: "duplicate", orderId: null };
+      paymentStateMachine.transition(payment.status, next, { actor: actor.kind });
+      await tx
+        .update(schema.payments)
+        .set({ status: next, failedAt: event.occurredAt, failureReason: event.failureReason ?? null })
+        .where(eq(schema.payments.id, payment.id));
+      return { outcome: "applied", orderId: null };
+    }
     const order = await lockOrder(tx, payment.orderId);
     if (["succeeded", "partially_refunded", "refunded"].includes(payment.status)) {
       await tx.insert(schema.paymentAttempts).values({

@@ -36,6 +36,7 @@ export interface TicketTypeView {
   minPerOrder: number;
   maxPerOrder: number;
   hidden: boolean;
+  membersOnly: boolean;
   position: number;
   status: "active" | "archived";
   poolId: string | null;
@@ -194,6 +195,7 @@ function toTypeView(r: TypeRow, a: { sold: number; held: number; available: numb
     minPerOrder: r.type.minPerOrder,
     maxPerOrder: r.type.maxPerOrder,
     hidden: r.type.hidden,
+    membersOnly: r.type.membersOnly,
     position: r.type.position,
     status: r.type.status,
     poolId: r.poolId,
@@ -331,6 +333,7 @@ export async function createTicketType(
         minPerOrder: v.minPerOrder,
         maxPerOrder: v.maxPerOrder,
         hidden: v.hidden,
+        membersOnly: v.membersOnly,
         position: v.position,
       })
       .returning({ id: schema.ticketTypes.id });
@@ -381,6 +384,7 @@ export async function updateTicketType(
     if (v.minPerOrder !== undefined) patch.minPerOrder = v.minPerOrder;
     if (v.maxPerOrder !== undefined) patch.maxPerOrder = v.maxPerOrder;
     if (v.hidden !== undefined) patch.hidden = v.hidden;
+    if (v.membersOnly !== undefined) patch.membersOnly = v.membersOnly;
     if (v.position !== undefined) patch.position = v.position;
     const min = patch.minPerOrder ?? current.minPerOrder;
     const max = patch.maxPerOrder ?? current.maxPerOrder;
@@ -578,7 +582,7 @@ export async function listPromoCodes(
   const rows = await db
     .select({
       code: schema.promoCodes,
-      redemptions: sql<number>`(select count(*)::int from ${schema.promoRedemptions} r where r.promo_code_id = ${schema.promoCodes.id})`,
+      redemptions: sql<number>`(select count(*)::int from ${schema.promoRedemptions} r where r.promo_code_id = "promo_codes"."id")`,
     })
     .from(schema.promoCodes)
     .where(and(eq(schema.promoCodes.eventId, eventId), eq(schema.promoCodes.organizationId, organizationId)))
@@ -688,6 +692,7 @@ export interface PublicTicketType {
   currency: string;
   minPerOrder: number;
   maxPerOrder: number;
+  membersOnly: boolean;
   /** null = unbounded */
   available: number | null;
   /** upcoming | on_sale | ended | sold_out */
@@ -754,6 +759,7 @@ export async function getPublicTicketing(
         currency: r.type.currency,
         minPerOrder: r.type.minPerOrder,
         maxPerOrder: r.type.maxPerOrder,
+        membersOnly: r.type.membersOnly,
         available: a.available,
         saleState: saleStateOf(
           { salesStartAt: r.type.salesStartAt, salesEndAt: r.type.salesEndAt, available: a.available },

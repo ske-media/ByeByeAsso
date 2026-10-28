@@ -4,6 +4,7 @@ import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
 import { type Actor, ForbiddenError, NotFoundError, newId, PreconditionFailedError } from "../kernel";
+import { hasActiveMembership } from "../memberships/memberships";
 import { emitDomainEvent } from "../outbox";
 import {
   DEFAULT_HOLD_MINUTES,
@@ -435,6 +436,21 @@ export async function createPublicOrder(
         code: "max_per_order",
       });
     }
+    const membersOnly = rows.filter((r) => r.type.membersOnly && seen.has(r.type.id));
+    if (membersOnly.length > 0) {
+      if (!v.email) {
+        throw new PreconditionFailedError("Indiquez votre adresse d'adhérent pour ce tarif.", {
+          code: "membership_email_required",
+          ticketTypeId: membersOnly[0]?.type.id,
+        });
+      }
+      if (!(await hasActiveMembership(tx, org.id, v.email, now))) {
+        throw new PreconditionFailedError(
+          "Ce tarif est réservé aux adhérents : aucune adhésion active pour cette adresse.",
+          { code: "membership_required", ticketTypeId: membersOnly[0]?.type.id },
+        );
+      }
+    }
     const totals = computeTotals(lines, null);
     const id = newId();
     const number = await nextOrderNumber(tx, org.id);
@@ -549,6 +565,22 @@ export async function updateBuyerDetails(
   await db.transaction(async (tx) => {
     const o = await lockOrder(tx, orderId);
     assertEditable(o, now);
+    const restricted = await tx
+      .select({ id: schema.orderItems.id })
+      .from(schema.orderItems)
+      .innerJoin(schema.ticketTypes, eq(schema.ticketTypes.id, schema.orderItems.ticketTypeId))
+      .where(and(eq(schema.orderItems.orderId, orderId), eq(schema.ticketTypes.membersOnly, true)))
+      .limit(1);
+    if (
+      restricted.length > 0 &&
+      v.email !== o.buyerEmail &&
+      !(await hasActiveMembership(tx, o.organizationId, v.email, now))
+    ) {
+      throw new PreconditionFailedError(
+        "Cette commande contient un tarif adhérent : l'adresse doit porter une adhésion active.",
+        { code: "membership_required", field: "email" },
+      );
+    }
     await tx
       .update(schema.orders)
       .set({
@@ -594,7 +626,7 @@ export async function applyPromoCode(
     const rows = await tx
       .select({
         promo: schema.promoCodes,
-        redemptions: sql<number>`(select count(*)::int from ${schema.promoRedemptions} r where r.promo_code_id = ${schema.promoCodes.id})`,
+        redemptions: sql<number>`(select count(*)::int from ${schema.promoRedemptions} r where r.promo_code_id = "promo_codes"."id")`,
       })
       .from(schema.promoCodes)
       .where(and(eq(schema.promoCodes.eventId, o.eventId), eq(schema.promoCodes.code, normalized)))
@@ -893,6 +925,18 @@ export async function startCheckout(
       if ((missing[0]?.n ?? 0) > 0)
         throw new PreconditionFailedError("Indiquez le nom de chaque participant.", { code: "attendees_required" });
     }
+    const restricted = await tx
+      .select({ id: schema.orderItems.id })
+      .from(schema.orderItems)
+      .innerJoin(schema.ticketTypes, eq(schema.ticketTypes.id, schema.orderItems.ticketTypeId))
+      .where(and(eq(schema.orderItems.orderId, orderId), eq(schema.ticketTypes.membersOnly, true)))
+      .limit(1);
+    if (restricted.length > 0 && !(await hasActiveMembership(tx, o.organizationId, o.buyerEmail, now))) {
+      throw new PreconditionFailedError(
+        "Ce tarif est réservé aux adhérents : aucune adhésion active pour cette adresse.",
+        { code: "membership_required" },
+      );
+    }
     if (o.totalMinor === 0) {
       await markOrderPaid(tx, ctx, actor, o, { paymentId: null, now });
       return { kind: "paid" };
@@ -1009,8 +1053,8 @@ export async function listOrders(
     .select({
       order: schema.orders,
       eventTitle: schema.events.title,
-      summary: sql<string>`(select string_agg(i.quantity || ' × ' || i.label, ', ' order by i.label) from ${schema.orderItems} i where i.order_id = ${schema.orders.id})`,
-      count: sql<number>`(select coalesce(sum(i.quantity), 0)::int from ${schema.orderItems} i where i.order_id = ${schema.orders.id})`,
+      summary: sql<string>`(select string_agg(i.quantity || ' × ' || i.label, ', ' order by i.label) from ${schema.orderItems} i where i.order_id = "orders"."id")`,
+      count: sql<number>`(select coalesce(sum(i.quantity), 0)::int from ${schema.orderItems} i where i.order_id = "orders"."id")`,
     })
     .from(schema.orders)
     .innerJoin(schema.events, eq(schema.events.id, schema.orders.eventId))
@@ -1165,8 +1209,8 @@ export async function listMyOrders(db: DbExecutor, actor: Actor, email: string):
     .select({
       order: schema.orders,
       eventTitle: schema.events.title,
-      summary: sql<string>`(select string_agg(i.quantity || ' × ' || i.label, ', ' order by i.label) from ${schema.orderItems} i where i.order_id = ${schema.orders.id})`,
-      count: sql<number>`(select coalesce(sum(i.quantity), 0)::int from ${schema.orderItems} i where i.order_id = ${schema.orders.id})`,
+      summary: sql<string>`(select string_agg(i.quantity || ' × ' || i.label, ', ' order by i.label) from ${schema.orderItems} i where i.order_id = "orders"."id")`,
+      count: sql<number>`(select coalesce(sum(i.quantity), 0)::int from ${schema.orderItems} i where i.order_id = "orders"."id")`,
     })
     .from(schema.orders)
     .innerJoin(schema.events, eq(schema.events.id, schema.orders.eventId))

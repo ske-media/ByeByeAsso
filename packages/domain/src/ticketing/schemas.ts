@@ -15,6 +15,7 @@ export const ticketTypeSchema = z
     minPerOrder: z.coerce.number().int().min(1).max(50).default(1),
     maxPerOrder: z.coerce.number().int().min(1).max(50).default(10),
     hidden: z.boolean().default(false),
+    membersOnly: z.boolean().default(false),
     position: z.coerce.number().int().min(0).max(1000).default(0),
     poolId: uuidSchema.nullable().optional(),
   })
@@ -40,6 +41,7 @@ export const updateTicketTypeSchema = z
     minPerOrder: z.coerce.number().int().min(1).max(50).optional(),
     maxPerOrder: z.coerce.number().int().min(1).max(50).optional(),
     hidden: z.boolean().optional(),
+    membersOnly: z.boolean().optional(),
     position: z.coerce.number().int().min(0).max(1000).optional(),
     poolId: uuidSchema.nullable().optional(),
   })

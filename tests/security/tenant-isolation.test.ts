@@ -627,3 +627,260 @@ describeLive("S5. ticketing — isolation, forged confirmations, replay, scanner
     ).toBe(401);
   });
 });
+
+describeLive("S6. memberships — isolation, forged activation, members-only tickets", () => {
+  let planA: { id: string }; // paid plan with review, in A
+  let membership: { id: string; accessToken: string };
+  let memberTypeId: string;
+  const memberEmail = `member-${run}@sec.kroov.local`;
+  let eventM: EventJson;
+
+  beforeAll(async () => {
+    const plan = await alice.post(`/api/v1/organizations/${orgA.id}/membership-plans`, {
+      name: `Adhésion ${run}`,
+      priceMinor: 2000,
+      periodKind: "rolling",
+      durationMonths: 12,
+      requiresReview: true,
+      benefits: ["Tarif adhérent"],
+    });
+    expect(plan.status).toBe(201);
+    planA = (plan.json as { data: { id: string } }).data;
+    const loc = await alice.post(`/api/v1/organizations/${orgA.id}/locations`, { name: "Salle M", city: "Paris" });
+    const ev = await alice.post(`/api/v1/organizations/${orgA.id}/events`, {
+      title: `Soirée adhérents ${run}`,
+      description: "Un tarif réservé aux adhérents, vérifié côté serveur et pas seulement dans l'interface.",
+      startsAt: inDays(30, 20),
+      endsAt: inDays(31, 1),
+      capacity: 50,
+      locationId: (loc.json as { data: { id: string } }).data.id,
+    });
+    eventM = (ev.json as { data: EventJson }).data;
+    expect(
+      (await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventM.id}/publish`, { version: eventM.version }))
+        .status,
+    ).toBe(200);
+    const tt = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventM.id}/ticket-types`, {
+      name: "Adhérent",
+      priceMinor: 500,
+      quota: 10,
+      membersOnly: true,
+    });
+    expect(tt.status).toBe(201);
+    memberTypeId = (tt.json as { data: { id: string } }).data.id;
+    expect(
+      (await alice.patch(`/api/v1/organizations/${orgA.id}/events/${eventM.id}/ticketing`, { ticketingStatus: "open" }))
+        .status,
+    ).toBe(200);
+  }, 60_000);
+
+  it("an outsider cannot read, create or decide on A's plans and memberships (403/404)", async () => {
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/membership-plans`)).status).toBe(403);
+    expect(
+      (
+        await carol.post(`/api/v1/organizations/${orgA.id}/membership-plans`, {
+          name: "Pirate",
+          priceMinor: 0,
+          periodKind: "rolling",
+          durationMonths: 12,
+        })
+      ).status,
+    ).toBe(403);
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/memberships`)).status).toBe(403);
+    // A's plan id under B's organization: not found, nothing changed (composite scope).
+    expect(
+      (
+        await bob.patch(`/api/v1/organizations/${orgB.id}/membership-plans/${planA.id}`, {
+          name: "Vol",
+          priceMinor: 0,
+          periodKind: "rolling",
+          durationMonths: 12,
+        })
+      ).status,
+    ).toBe(404);
+    // Dave (event-scoped manager of A) has no memberships.manage.
+    expect((await dave.get(`/api/v1/organizations/${orgA.id}/memberships`)).status).toBe(403);
+    // Public: B's slug with A's plan id → 404, no application created.
+    const anon = new ApiClient(baseUrl!);
+    expect(
+      (
+        await anon.post(`/api/v1/public/organizations/${orgB.slug}/membership-applications`, {
+          planId: planA.id,
+          email: memberEmail,
+          firstName: "Mia",
+          lastName: "Membre",
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("members-only tickets are refused without an active membership (412), even with a plausible e-mail", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const noEmail = await anon.post("/api/v1/public/orders", {
+      organizationSlug: orgA.slug,
+      eventSlug: eventM.slug,
+      items: [{ ticketTypeId: memberTypeId, quantity: 1 }],
+    });
+    expect(noEmail.status).toBe(412);
+    expect((noEmail.json as { error: { details?: { code?: string } } }).error.details?.code).toBe(
+      "membership_email_required",
+    );
+    const notMember = await anon.post("/api/v1/public/orders", {
+      organizationSlug: orgA.slug,
+      eventSlug: eventM.slug,
+      items: [{ ticketTypeId: memberTypeId, quantity: 1 }],
+      email: memberEmail,
+    });
+    expect(notMember.status).toBe(412);
+    expect((notMember.json as { error: { details?: { code?: string } } }).error.details?.code).toBe(
+      "membership_required",
+    );
+  });
+
+  it("application: token required (uniform 404); status cannot be forged; duplicate application → 409", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const res = await anon.post(`/api/v1/public/organizations/${orgA.slug}/membership-applications`, {
+      planId: planA.id,
+      email: memberEmail,
+      firstName: "Mia",
+      lastName: "Membre",
+      status: "active",
+    });
+    expect(res.status).toBe(201);
+    membership = (res.json as { data: { id: string; accessToken: string; status: string } }).data;
+    expect((res.json as { data: { status: string } }).data.status).toBe("pending");
+    expect((await anon.get(`/api/v1/public/memberships/${membership.id}`)).status).toBe(404);
+    expect((await anon.get(`/api/v1/public/memberships/${membership.id}?k=forged`)).status).toBe(404);
+    expect((await anon.get(`/api/v1/public/memberships/${membership.id}?k=${membership.accessToken}`)).status).toBe(
+      200,
+    );
+    // Checkout before approval: 412, never a payment session.
+    expect(
+      (await anon.post(`/api/v1/public/memberships/${membership.id}/checkout?k=${membership.accessToken}`)).status,
+    ).toBe(412);
+    // Second application for the same e-mail → 409 application_in_progress.
+    const dup = await anon.post(`/api/v1/public/organizations/${orgA.slug}/membership-applications`, {
+      planId: planA.id,
+      email: memberEmail.toUpperCase(),
+      firstName: "Mia",
+      lastName: "Membre",
+    });
+    expect(dup.status).toBe(409);
+    // Only A's managers decide: Carol/Bob/Dave get 403 or 404.
+    expect((await carol.post(`/api/v1/organizations/${orgA.id}/memberships/${membership.id}/approve`)).status).toBe(
+      403,
+    );
+    expect((await bob.post(`/api/v1/organizations/${orgB.id}/memberships/${membership.id}/approve`)).status).toBe(404);
+    expect((await dave.post(`/api/v1/organizations/${orgA.id}/memberships/${membership.id}/approve`)).status).toBe(403);
+    // Still pending, so still not a member.
+    expect(
+      (
+        await anon.post("/api/v1/public/orders", {
+          organizationSlug: orgA.slug,
+          eventSlug: eventM.slug,
+          items: [{ ticketTypeId: memberTypeId, quantity: 1 }],
+          email: memberEmail,
+        })
+      ).status,
+    ).toBe(412);
+  });
+
+  it("approval does not activate a paid membership; forged webhooks are rejected; the signed webhook activates once", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const q = `?k=${membership.accessToken}`;
+    const approved = await alice.post(`/api/v1/organizations/${orgA.id}/memberships/${membership.id}/approve`);
+    expect(approved.status).toBe(200);
+    expect((approved.json as { data: { status: string } }).data.status).toBe("awaiting_payment");
+    const checkout = await anon.post(`/api/v1/public/memberships/${membership.id}/checkout${q}`);
+    expect(checkout.status).toBe(200);
+    const data = (checkout.json as { data: { kind: string; url: string } }).data;
+    expect(data.kind).toBe("redirect");
+    const sessionId = data.url.split("/paiement/")[1]!;
+    const body = JSON.stringify({
+      id: `evt_forged_m_${run}`,
+      type: "payment.succeeded",
+      object_id: sessionId,
+      charge_ref: "ch_x",
+      occurred_at: new Date().toISOString(),
+    });
+    const forged = await fetch(`${baseUrl}/api/v1/payments/webhooks/fake`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-kroov-signature": "v1=00" },
+      body,
+    });
+    expect(forged.status).toBe(400);
+    expect((await anon.get(`/api/v1/public/memberships/${membership.id}${q}`)).json).toMatchObject({
+      data: { status: "awaiting_payment" },
+    });
+    const settled = await anon.post(`/api/v1/payments/fake/${sessionId}`, { decision: "succeeded" });
+    expect((settled.json as { data: { outcome: string } }).data.outcome).toBe("applied");
+    const active = (await anon.get(`/api/v1/public/memberships/${membership.id}${q}`)).json as {
+      data: { status: string; validUntil: string | null };
+    };
+    expect(active.data.status).toBe("active");
+    expect(active.data.validUntil).not.toBeNull();
+    // Replay: duplicate, still one active membership (a second would violate the partial unique index).
+    const replay = await anon.post(`/api/v1/payments/fake/${sessionId}`, { decision: "succeeded" });
+    expect(["duplicate", "applied"]).toContain((replay.json as { data: { outcome: string } }).data.outcome);
+    const list = (await alice.get(`/api/v1/organizations/${orgA.id}/memberships?status=active&q=${memberEmail}`))
+      .json as { data: { memberships: Array<{ id: string }> } };
+    expect(list.data.memberships.filter((m) => m.id === membership.id)).toHaveLength(1);
+    // A new application while active → 409 membership_exists.
+    const again = await anon.post(`/api/v1/public/organizations/${orgA.slug}/membership-applications`, {
+      planId: planA.id,
+      email: memberEmail,
+      firstName: "Mia",
+      lastName: "Membre",
+    });
+    expect(again.status).toBe(409);
+    expect((again.json as { error: { details?: { code?: string } } }).error.details?.code).toBe("membership_exists");
+    // Public membership responses never leak hashes or secrets.
+    expect(JSON.stringify(active)).not.toMatch(/accessTokenHash|secretVersion/);
+  });
+
+  it("an active member can buy the members-only ticket, but only with the member e-mail on the order", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const res = await anon.post("/api/v1/public/orders", {
+      organizationSlug: orgA.slug,
+      eventSlug: eventM.slug,
+      items: [{ ticketTypeId: memberTypeId, quantity: 1 }],
+      email: memberEmail,
+    });
+    expect(res.status).toBe(201);
+    const o = (res.json as { data: { id: string; accessToken: string } }).data;
+    // Switching the buyer e-mail to a non-member address at step 2 is refused (412).
+    const swap = await anon.request("PATCH", `/api/v1/public/orders/${o.id}?k=${o.accessToken}`, {
+      email: `intrus-${run}@sec.kroov.local`,
+      firstName: "In",
+      lastName: "Trus",
+    });
+    expect(swap.status).toBe(412);
+    expect(
+      (
+        await anon.request("PATCH", `/api/v1/public/orders/${o.id}?k=${o.accessToken}`, {
+          email: memberEmail,
+          firstName: "Mia",
+          lastName: "Membre",
+          attendees: [{ ticketTypeId: memberTypeId, names: ["Mia Membre"] }],
+        })
+      ).status,
+    ).toBe(200);
+    // Suspension immediately removes the privilege: checkout is refused with the membership code.
+    expect(
+      (
+        await alice.post(`/api/v1/organizations/${orgA.id}/memberships/${membership.id}/suspend`, {
+          reason: "Vérification en cours",
+        })
+      ).status,
+    ).toBe(200);
+    const refused = await anon.post(`/api/v1/public/orders/${o.id}/checkout?k=${o.accessToken}`);
+    expect(refused.status).toBe(412);
+    expect((refused.json as { error: { details?: { code?: string } } }).error.details?.code).toBe(
+      "membership_required",
+    );
+    expect((await alice.post(`/api/v1/organizations/${orgA.id}/memberships/${membership.id}/reactivate`)).status).toBe(
+      200,
+    );
+    expect((await anon.post(`/api/v1/public/orders/${o.id}/checkout?k=${o.accessToken}`)).status).toBe(200);
+  });
+});

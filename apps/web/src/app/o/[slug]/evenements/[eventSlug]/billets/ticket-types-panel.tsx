@@ -39,6 +39,7 @@ export interface TicketTypeRow {
   minPerOrder: number;
   maxPerOrder: number;
   hidden: boolean;
+  membersOnly: boolean;
   position: number;
   status: "active" | "archived";
   poolId: string | null;
@@ -226,6 +227,20 @@ function TicketTypeForm({
           </span>
         </span>
       </label>
+      <label className="flex items-start gap-2 py-2 text-[13px]">
+        <input
+          type="checkbox"
+          name="membersOnly"
+          defaultChecked={initial?.membersOnly ?? false}
+          className="mt-1 size-4 accent-ink"
+        />
+        <span>
+          Réservé aux adhérents
+          <span className="block text-muted">
+            L'adhésion active est vérifiée sur l'e-mail de la commande, à la réservation et au paiement.
+          </span>
+        </span>
+      </label>
       <div className="flex flex-wrap justify-end gap-2 pt-2">
         <DialogClose asChild>
           <Button variant="secondary">Annuler</Button>
@@ -278,6 +293,11 @@ export function TicketTypesPanel({ ctx, types, pools }: { ctx: Ctx; types: Ticke
                     {t.hidden ? (
                       <Badge tone="lavender" noDot className="ml-2">
                         Masqué
+                      </Badge>
+                    ) : null}
+                    {t.membersOnly ? (
+                      <Badge tone="lime" noDot className="ml-2">
+                        Adhérents
                       </Badge>
                     ) : null}
                     {t.poolName ? <span className="block text-[11px] text-muted">Pool « {t.poolName} »</span> : null}

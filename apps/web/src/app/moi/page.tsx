@@ -40,6 +40,13 @@ export default async function ProfilePage() {
             Voir mes billets →
           </Link>
         </Panel>
+        <Panel className="bg-lavender">
+          <PanelTitle>Mes adhésions</PanelTitle>
+          <p className="text-[13px]">Vos cartes d'adhérent et vos renouvellements, pour chaque organisation.</p>
+          <Link href="/moi/adhesions" className="mt-2 inline-block font-bold underline underline-offset-4">
+            Voir mes adhésions →
+          </Link>
+        </Panel>
         <Panel>
           <PanelTitle>Identité</PanelTitle>
           <ProfileForm profile={{ name: profile.name, timezone: profile.timezone, phone: profile.phone ?? "" }} />

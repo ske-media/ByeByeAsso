@@ -64,6 +64,8 @@ export const ticketTypes = pgTable(
     maxPerOrder: integer("max_per_order").notNull().default(10),
     /** Hidden categories are purchasable only through a direct link with the type id (invitations, partners). */
     hidden: boolean("hidden").notNull().default(false),
+    /** Reserved to e-mails holding an ACTIVE membership of the organization (checked at reservation and checkout). */
+    membersOnly: boolean("members_only").notNull().default(false),
     position: integer("position").notNull().default(0),
     status: ticketTypeStatus("status").notNull().default("active"),
     ...timestamps(),
@@ -530,7 +532,9 @@ export const payments = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    orderId: uuid("order_id").notNull(),
+    /** Exactly one of order_id / membership_id is set (CHECK below). */
+    orderId: uuid("order_id"),
+    membershipId: uuid("membership_id"),
     provider: paymentProvider("provider").notNull(),
     /** Checkout session / intent reference at the provider. */
     providerRef: text("provider_ref").notNull(),
