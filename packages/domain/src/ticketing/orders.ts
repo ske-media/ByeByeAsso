@@ -3,6 +3,7 @@ import { schema } from "@kroov/database";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
+import { recordTouchpoint } from "../crm";
 import { type Actor, ForbiddenError, NotFoundError, newId, PreconditionFailedError } from "../kernel";
 import { hasActiveMembership } from "../memberships/memberships";
 import { emitDomainEvent } from "../outbox";
@@ -782,6 +783,20 @@ export async function markOrderPaid(
       .onConflictDoNothing();
   }
   await recordOrderPaidLedger(tx, order);
+  // CRM (phase 7): the buyer becomes/updates a contact of this organization, in the same transaction.
+  await recordTouchpoint(tx, {
+    organizationId: order.organizationId,
+    source: "order",
+    sourceId: order.id,
+    sourceLabel: `commande ${order.number}`,
+    email: order.buyerEmail,
+    firstName: order.buyerFirstName,
+    lastName: order.buyerLastName,
+    userId: order.userId,
+    occurredAt: now,
+    marketingOptIn: order.marketingOptIn,
+    customerRelationship: order.totalMinor > 0,
+  });
   await recordAudit(tx, actor, {
     organizationId: order.organizationId,
     action: "order.paid",

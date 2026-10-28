@@ -3,6 +3,7 @@ import { schema } from "@kroov/database";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { contextHasPermission, loadMemberContext, requirePermission } from "../authorization";
+import { recordTouchpoint } from "../crm";
 import {
   type Actor,
   ConflictError,
@@ -836,6 +837,21 @@ export async function applyAsVolunteer(
           ),
         );
     await saveAnswers(tx, row, answers, ec.questions, actor.kind === "user" ? actor.userId : null);
+    // CRM (phase 7): a volunteer application is a touchpoint, never a customer relationship.
+    await recordTouchpoint(tx, {
+      organizationId: org.id,
+      source: "volunteer_application",
+      sourceId: row.id,
+      sourceLabel: `candidature ${row.number}`,
+      email: row.email,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      phone: row.phone,
+      userId: row.userId,
+      occurredAt: now,
+      marketingOptIn: row.marketingOptIn,
+      customerRelationship: false,
+    });
     await recordAudit(tx, actor, {
       organizationId: org.id,
       action: "volunteer_application.submitted",
@@ -1349,6 +1365,20 @@ async function decideInTx(
       .set({ reciprocal: false })
       .where(eq(schema.volunteerSocialPreferences.applicationId, a.id));
   }
+  // CRM counters follow the decision (approved volunteers count as such in segments).
+  await recordTouchpoint(tx, {
+    organizationId,
+    source: "volunteer_application",
+    sourceId: a.id,
+    sourceLabel: `candidature ${a.number}`,
+    email: a.email,
+    firstName: a.firstName,
+    lastName: a.lastName,
+    phone: a.phone,
+    userId: a.userId,
+    occurredAt: now,
+    marketingOptIn: null,
+  });
   await recordAudit(tx, actor, {
     organizationId,
     action: `volunteer_application.${to}`,

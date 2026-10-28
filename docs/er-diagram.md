@@ -72,6 +72,21 @@ erDiagram
   volunteer_applications ||--o{ volunteer_assignments : "assigned to"
   volunteer_assignments ||--o{ volunteer_assignment_requests : "contested by"
   volunteer_assignments ||--o| volunteer_attendance : "attended"
+  organizations ||--o{ contacts : "owns (private base)"
+  users |o--o{ contacts : "verified account (per organization)"
+  contacts |o--o{ contacts : "merged into"
+  contacts ||--o{ contact_identities : "identified by"
+  contacts ||--o{ contact_tag_assignments : tagged
+  contact_tags ||--o{ contact_tag_assignments : "applies"
+  organizations ||--o{ contact_tags : defines
+  contacts ||--o{ contact_notes : "annotated"
+  contacts ||--o{ consent_records : "consent journal"
+  organizations ||--o{ contact_suppressions : "excludes (by e-mail)"
+  contacts ||--o{ contact_merge_records : "survives"
+  contacts ||--o{ contact_merge_records : "merged (snapshot)"
+  organizations ||--o{ segments : defines
+  segments ||--o{ segment_members : "materialised"
+  contacts ||--o{ segment_members : "member of"
   payments ||--o{ payment_attempts : "attempted"
   orders ||--o{ refunds : "refunded by"
   payments ||--o{ refunds : "reverses"
@@ -734,6 +749,116 @@ erDiagram
     text note
     uuid recorded_by FK
   }
+  contacts {
+    uuid id PK
+    uuid organization_id FK
+    text primary_email
+    text first_name
+    text last_name
+    text phone
+    text city
+    uuid user_id FK
+    contact_status status
+    uuid merged_into_contact_id FK
+    crm_source source
+    marketing_email_status marketing_email_status
+    timestamptz first_seen_at
+    timestamptz last_activity_at
+    int orders_count
+    int tickets_count
+    int memberships_count
+    int applications_count
+    int missions_count
+    timestamptz archived_at
+    int version
+  }
+  contact_identities {
+    uuid id PK
+    uuid organization_id FK
+    uuid contact_id FK
+    contact_identity_kind kind
+    text value
+    boolean verified
+    boolean is_primary
+    crm_source source
+  }
+  contact_tags {
+    uuid id PK
+    uuid organization_id FK
+    text name
+    text slug
+    text color
+  }
+  contact_tag_assignments {
+    uuid id PK
+    uuid organization_id FK
+    uuid contact_id FK
+    uuid tag_id FK
+    uuid assigned_by FK
+  }
+  contact_notes {
+    uuid id PK
+    uuid organization_id FK
+    uuid contact_id FK
+    uuid author_id FK
+    text body
+    boolean pinned
+  }
+  consent_records {
+    uuid id PK
+    uuid organization_id FK
+    uuid contact_id FK
+    consent_channel channel
+    consent_status status
+    consent_basis basis
+    crm_source source
+    uuid source_id
+    text evidence
+    timestamptz occurred_at
+    uuid recorded_by FK
+  }
+  contact_suppressions {
+    uuid id PK
+    uuid organization_id FK
+    text email
+    suppression_reason reason
+    crm_source source
+    text note
+    uuid created_by FK
+    timestamptz lifted_at
+    uuid lifted_by FK
+    text lift_reason
+  }
+  contact_merge_records {
+    uuid id PK
+    uuid organization_id FK
+    uuid surviving_contact_id FK
+    uuid merged_contact_id FK
+    jsonb snapshot
+    text reason
+    uuid merged_by FK
+  }
+  segments {
+    uuid id PK
+    uuid organization_id FK
+    text name
+    text slug
+    text description
+    segment_kind kind
+    jsonb definition
+    int member_count
+    timestamptz computed_at
+    uuid created_by FK
+    timestamptz archived_at
+    int version
+  }
+  segment_members {
+    uuid id PK
+    uuid organization_id FK
+    uuid segment_id FK
+    uuid contact_id FK
+    uuid added_by FK
+  }
   outbox_events {
     uuid id PK
     text aggregate_type
@@ -767,44 +892,51 @@ erDiagram
 
 ## Contraintes d'intégrité notables
 
-| Table                                                 | Contrainte                                                                                                                                                                                                                                   | Invariant garanti                                                                                   |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `users`                                               | `UNIQUE (email)`                                                                                                                                                                                                                             | une identité par adresse                                                                            |
-| `organizations`                                       | `UNIQUE (slug)`, `CHECK slug ~ '^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$'`, `CHECK char_length(name) BETWEEN 2 AND 120`                                                                                                                        | adresses publiques uniques et valides                                                               |
-| `organization_members`                                | `UNIQUE (organization_id, user_id) WHERE status = 'active'`                                                                                                                                                                                  | **une adhésion active par utilisateur et organisation**                                             |
-| `organization_members`                                | `UNIQUE (organization_id, id)`                                                                                                                                                                                                               | cible des FK composites tenant-safe                                                                 |
-| `member_role_assignments`                             | `FK (organization_id, member_id) → organization_members (organization_id, id)`                                                                                                                                                               | **aucune attribution de rôle croisée entre organisations**                                          |
-| `member_role_assignments`                             | uniques partiels `(member_id, role_id) WHERE event_id IS NULL` et `(member_id, role_id, event_id) WHERE event_id IS NOT NULL`                                                                                                                | pas de doublon de rôle par périmètre                                                                |
-| `roles`                                               | `UNIQUE (key) WHERE organization_id IS NULL`, `UNIQUE (organization_id, key)`                                                                                                                                                                | rôles système uniques, rôles custom par organisation                                                |
-| `permissions`                                         | `UNIQUE (key)`, `CHECK key ~ '^[a-z]+\.[a-z]+$'`                                                                                                                                                                                             | catalogue normalisé                                                                                 |
-| `organization_invitations`                            | `UNIQUE (token_hash)`, `UNIQUE (organization_id, email) WHERE status = 'pending'`, `CHECK email = lower(email)`                                                                                                                              | jeton unique, une invitation en attente par adresse                                                 |
-| `events`                                              | `UNIQUE (organization_id, slug)`, `UNIQUE (organization_id, id)`, `CHECK ends_at > starts_at`, `CHECK doors_at <= starts_at`, `CHECK capacity >= 0`, `CHECK version >= 1`, `CHECK status <> 'cancelled' OR cancellation_reason IS NOT NULL`  | adresse publique unique par organisation, dates cohérentes, annulation toujours motivée             |
-| `events`                                              | `FK (organization_id, location_id) → event_locations (organization_id, id) ON DELETE SET NULL`                                                                                                                                               | **un événement ne peut pas pointer un lieu d'une autre organisation**                               |
-| `event_settings`                                      | `FK (organization_id, event_id) → events (organization_id, id)`                                                                                                                                                                              | réglages toujours du même tenant                                                                    |
-| `member_role_assignments`, `organization_invitations` | `FK (organization_id, event_id) → events (organization_id, id) ON DELETE CASCADE`                                                                                                                                                            | **un droit limité à un événement ne peut viser qu'un événement du même tenant** ; supprimé avec lui |
-| `event_media`                                         | `UNIQUE (event_id) WHERE role = 'poster'`, FK composite vers `events`                                                                                                                                                                        | une affiche par événement                                                                           |
-| `stored_files`                                        | `UNIQUE (bucket, object_key)`, `CHECK mime_type ~ '^[a-z]+/[a-z0-9.+-]+$'`                                                                                                                                                                   | un objet de stockage référencé une fois                                                             |
-| `form_*`                                              | `UNIQUE (form_id, key)`, `UNIQUE (form_id, subject_type, subject_id)`, `UNIQUE (submission_id, field_id)`, FK composites                                                                                                                     | formulaires dynamiques cohérents par tenant (servis en phases 3/5)                                  |
-| `audit_logs`                                          | `CHECK actor_kind IN (…)`, `CHECK action ~ '^[a-z_]+\.[a-z_]+$'`                                                                                                                                                                             | journal structuré                                                                                   |
-| `membership_plans`                                    | `UNIQUE (organization_id, slug)`, `CHECK period` (fixe : dates cohérentes ; glissante : 1–60 mois), `CHECK price_minor >= 0`                                                                                                                 | une formule par adresse et organisation ; période toujours exploitable                              |
-| `memberships`                                         | `UNIQUE (organization_id, member_email) WHERE status = 'active'`, `UNIQUE (organization_id, user_id) WHERE status = 'active' AND user_id IS NOT NULL`                                                                                        | **une seule adhésion active par personne et organisation** (doublon de webhook inclus)              |
-| `memberships`                                         | `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK active_has_validity`, `CHECK cancel_reason`, FK composite `renewed_from → memberships (organization_id, id)`                                                        | numéros stables, jeton unique, pas d'adhésion active sans dates, renouvellement intra-organisation  |
-| `membership_validity_changes`                         | aucune mise à jour ni suppression (append-only par le domaine), `CHECK kind ~ '^[a-z_]+$'`                                                                                                                                                   | historique de validité inaltérable                                                                  |
-| `payments`                                            | `order_id` nullable, `membership_id` nullable, `CHECK payments_target_exclusive` (exactement une cible)                                                                                                                                      | un paiement règle une commande **ou** une cotisation, jamais les deux ni aucune                     |
-| `volunteer_applications`                              | `UNIQUE (event_id, email) WHERE status NOT IN ('rejected','withdrawn')`, `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK email = lower(email)`, `CHECK rejection ⇒ decision_reason`                                 | **une candidature vivante par adresse et événement** ; motif obligatoire au refus                   |
-| `volunteer_shifts`                                    | `CHECK ends_at > starts_at`, `CHECK 0 ≤ required_count ≤ max_count`, `CHECK durée ≤ 24 h`, FK composites événement et poste                                                                                                                  | créneaux exploitables par le planning                                                               |
-| `volunteer_position_preferences`                      | `UNIQUE (application_id, position_id)`, `UNIQUE (application_id, rank)`, `CHECK rank ≥ 1`                                                                                                                                                    | vœux ordonnés sans doublon                                                                          |
-| `volunteer_availabilities`                            | `CHECK ends_at > starts_at` ; domaine : fenêtre événement ± 24 h, plages disponibles sans chevauchement                                                                                                                                      | disponibilités projetables sur les créneaux                                                         |
-| `volunteer_skills` / `volunteer_social_preferences`   | `UNIQUE (application_id, skill_id)` / `UNIQUE (application_id, target_email)`, `CHECK target_email = lower(...)`                                                                                                                             | une déclaration par compétence ; un souhait par adresse                                             |
-| `skills`, `volunteer_teams`, `volunteer_positions`    | `UNIQUE (organization_id, slug)`, `UNIQUE (organization_id, id)`, slugs validés                                                                                                                                                              | catalogue par organisation, cibles de FK composites                                                 |
-| `events`                                              | `CHECK volunteer_target_count ≥ 0, volunteer_max_hours ∈ [0,24], volunteer_min_rest_minutes ∈ [0,1440]`                                                                                                                                      | réglages de planning bornés                                                                         |
-| `schedule_versions`                                   | `UNIQUE (event_id, number)`, `UNIQUE (event_id) WHERE status = 'published'`, `UNIQUE (organization_id, id)`, FK composites événement et `based_on_version_id → schedule_versions (organization_id, id)`, `CHECK published ⇒ published_at/by` | **une seule version publiée par événement** ; numérotation stable ; lignée intra-tenant             |
-| `schedule_generation_runs`                            | `CHECK char_length(input_hash) = 64`, FK composite version                                                                                                                                                                                   | chaque exécution du moteur est rejouable (instantané + empreinte)                                   |
-| `volunteer_assignments`                               | `UNIQUE (version_id, shift_id, application_id)`, FK composites version / créneau / candidature (même tenant)                                                                                                                                 | pas de doublon d'affectation ; **jamais d'affectation croisée entre organisations**                 |
-| `volunteer_assignment_requests`                       | `UNIQUE (assignment_id) WHERE status = 'open'`, FK composites                                                                                                                                                                                | une seule demande ouverte par mission                                                               |
-| `volunteer_attendance`                                | `UNIQUE (assignment_id)`, `CHECK checked_out_at ≥ checked_in_at`                                                                                                                                                                             | un pointage par mission                                                                             |
-| vue `active_volunteer_commitments`                    | affectations de la version **publiée**, non déclinées, créneau actif                                                                                                                                                                         | ce qui engage réellement une personne (les propositions n'y figurent jamais)                        |
-| infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                     | idempotence, relais, surcharge par organisation                                                     |
+| Table                                                 | Contrainte                                                                                                                                                                                                                                                                                 | Invariant garanti                                                                                                                           |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`                                               | `UNIQUE (email)`                                                                                                                                                                                                                                                                           | une identité par adresse                                                                                                                    |
+| `organizations`                                       | `UNIQUE (slug)`, `CHECK slug ~ '^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$'`, `CHECK char_length(name) BETWEEN 2 AND 120`                                                                                                                                                                      | adresses publiques uniques et valides                                                                                                       |
+| `organization_members`                                | `UNIQUE (organization_id, user_id) WHERE status = 'active'`                                                                                                                                                                                                                                | **une adhésion active par utilisateur et organisation**                                                                                     |
+| `organization_members`                                | `UNIQUE (organization_id, id)`                                                                                                                                                                                                                                                             | cible des FK composites tenant-safe                                                                                                         |
+| `member_role_assignments`                             | `FK (organization_id, member_id) → organization_members (organization_id, id)`                                                                                                                                                                                                             | **aucune attribution de rôle croisée entre organisations**                                                                                  |
+| `member_role_assignments`                             | uniques partiels `(member_id, role_id) WHERE event_id IS NULL` et `(member_id, role_id, event_id) WHERE event_id IS NOT NULL`                                                                                                                                                              | pas de doublon de rôle par périmètre                                                                                                        |
+| `roles`                                               | `UNIQUE (key) WHERE organization_id IS NULL`, `UNIQUE (organization_id, key)`                                                                                                                                                                                                              | rôles système uniques, rôles custom par organisation                                                                                        |
+| `permissions`                                         | `UNIQUE (key)`, `CHECK key ~ '^[a-z]+\.[a-z]+$'`                                                                                                                                                                                                                                           | catalogue normalisé                                                                                                                         |
+| `organization_invitations`                            | `UNIQUE (token_hash)`, `UNIQUE (organization_id, email) WHERE status = 'pending'`, `CHECK email = lower(email)`                                                                                                                                                                            | jeton unique, une invitation en attente par adresse                                                                                         |
+| `events`                                              | `UNIQUE (organization_id, slug)`, `UNIQUE (organization_id, id)`, `CHECK ends_at > starts_at`, `CHECK doors_at <= starts_at`, `CHECK capacity >= 0`, `CHECK version >= 1`, `CHECK status <> 'cancelled' OR cancellation_reason IS NOT NULL`                                                | adresse publique unique par organisation, dates cohérentes, annulation toujours motivée                                                     |
+| `events`                                              | `FK (organization_id, location_id) → event_locations (organization_id, id) ON DELETE SET NULL`                                                                                                                                                                                             | **un événement ne peut pas pointer un lieu d'une autre organisation**                                                                       |
+| `event_settings`                                      | `FK (organization_id, event_id) → events (organization_id, id)`                                                                                                                                                                                                                            | réglages toujours du même tenant                                                                                                            |
+| `member_role_assignments`, `organization_invitations` | `FK (organization_id, event_id) → events (organization_id, id) ON DELETE CASCADE`                                                                                                                                                                                                          | **un droit limité à un événement ne peut viser qu'un événement du même tenant** ; supprimé avec lui                                         |
+| `event_media`                                         | `UNIQUE (event_id) WHERE role = 'poster'`, FK composite vers `events`                                                                                                                                                                                                                      | une affiche par événement                                                                                                                   |
+| `stored_files`                                        | `UNIQUE (bucket, object_key)`, `CHECK mime_type ~ '^[a-z]+/[a-z0-9.+-]+$'`                                                                                                                                                                                                                 | un objet de stockage référencé une fois                                                                                                     |
+| `form_*`                                              | `UNIQUE (form_id, key)`, `UNIQUE (form_id, subject_type, subject_id)`, `UNIQUE (submission_id, field_id)`, FK composites                                                                                                                                                                   | formulaires dynamiques cohérents par tenant (servis en phases 3/5)                                                                          |
+| `audit_logs`                                          | `CHECK actor_kind IN (…)`, `CHECK action ~ '^[a-z_]+\.[a-z_]+$'`                                                                                                                                                                                                                           | journal structuré                                                                                                                           |
+| `membership_plans`                                    | `UNIQUE (organization_id, slug)`, `CHECK period` (fixe : dates cohérentes ; glissante : 1–60 mois), `CHECK price_minor >= 0`                                                                                                                                                               | une formule par adresse et organisation ; période toujours exploitable                                                                      |
+| `memberships`                                         | `UNIQUE (organization_id, member_email) WHERE status = 'active'`, `UNIQUE (organization_id, user_id) WHERE status = 'active' AND user_id IS NOT NULL`                                                                                                                                      | **une seule adhésion active par personne et organisation** (doublon de webhook inclus)                                                      |
+| `memberships`                                         | `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK active_has_validity`, `CHECK cancel_reason`, FK composite `renewed_from → memberships (organization_id, id)`                                                                                                      | numéros stables, jeton unique, pas d'adhésion active sans dates, renouvellement intra-organisation                                          |
+| `membership_validity_changes`                         | aucune mise à jour ni suppression (append-only par le domaine), `CHECK kind ~ '^[a-z_]+$'`                                                                                                                                                                                                 | historique de validité inaltérable                                                                                                          |
+| `payments`                                            | `order_id` nullable, `membership_id` nullable, `CHECK payments_target_exclusive` (exactement une cible)                                                                                                                                                                                    | un paiement règle une commande **ou** une cotisation, jamais les deux ni aucune                                                             |
+| `volunteer_applications`                              | `UNIQUE (event_id, email) WHERE status NOT IN ('rejected','withdrawn')`, `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK email = lower(email)`, `CHECK rejection ⇒ decision_reason`                                                                               | **une candidature vivante par adresse et événement** ; motif obligatoire au refus                                                           |
+| `volunteer_shifts`                                    | `CHECK ends_at > starts_at`, `CHECK 0 ≤ required_count ≤ max_count`, `CHECK durée ≤ 24 h`, FK composites événement et poste                                                                                                                                                                | créneaux exploitables par le planning                                                                                                       |
+| `volunteer_position_preferences`                      | `UNIQUE (application_id, position_id)`, `UNIQUE (application_id, rank)`, `CHECK rank ≥ 1`                                                                                                                                                                                                  | vœux ordonnés sans doublon                                                                                                                  |
+| `volunteer_availabilities`                            | `CHECK ends_at > starts_at` ; domaine : fenêtre événement ± 24 h, plages disponibles sans chevauchement                                                                                                                                                                                    | disponibilités projetables sur les créneaux                                                                                                 |
+| `volunteer_skills` / `volunteer_social_preferences`   | `UNIQUE (application_id, skill_id)` / `UNIQUE (application_id, target_email)`, `CHECK target_email = lower(...)`                                                                                                                                                                           | une déclaration par compétence ; un souhait par adresse                                                                                     |
+| `skills`, `volunteer_teams`, `volunteer_positions`    | `UNIQUE (organization_id, slug)`, `UNIQUE (organization_id, id)`, slugs validés                                                                                                                                                                                                            | catalogue par organisation, cibles de FK composites                                                                                         |
+| `events`                                              | `CHECK volunteer_target_count ≥ 0, volunteer_max_hours ∈ [0,24], volunteer_min_rest_minutes ∈ [0,1440]`                                                                                                                                                                                    | réglages de planning bornés                                                                                                                 |
+| `schedule_versions`                                   | `UNIQUE (event_id, number)`, `UNIQUE (event_id) WHERE status = 'published'`, `UNIQUE (organization_id, id)`, FK composites événement et `based_on_version_id → schedule_versions (organization_id, id)`, `CHECK published ⇒ published_at/by`                                               | **une seule version publiée par événement** ; numérotation stable ; lignée intra-tenant                                                     |
+| `schedule_generation_runs`                            | `CHECK char_length(input_hash) = 64`, FK composite version                                                                                                                                                                                                                                 | chaque exécution du moteur est rejouable (instantané + empreinte)                                                                           |
+| `volunteer_assignments`                               | `UNIQUE (version_id, shift_id, application_id)`, FK composites version / créneau / candidature (même tenant)                                                                                                                                                                               | pas de doublon d'affectation ; **jamais d'affectation croisée entre organisations**                                                         |
+| `volunteer_assignment_requests`                       | `UNIQUE (assignment_id) WHERE status = 'open'`, FK composites                                                                                                                                                                                                                              | une seule demande ouverte par mission                                                                                                       |
+| `volunteer_attendance`                                | `UNIQUE (assignment_id)`, `CHECK checked_out_at ≥ checked_in_at`                                                                                                                                                                                                                           | un pointage par mission                                                                                                                     |
+| vue `active_volunteer_commitments`                    | affectations de la version **publiée**, non déclinées, créneau actif                                                                                                                                                                                                                       | ce qui engage réellement une personne (les propositions n'y figurent jamais)                                                                |
+| `contacts`                                            | `UNIQUE (organization_id, primary_email) WHERE status = 'active'`, `UNIQUE (organization_id, id)`, `CHECK email = lower(email)` + format, `CHECK merged ⇔ merged_into`, `CHECK archived ⇔ archived_at`, FK composite `merged_into → contacts (organization_id, id)`, `CHECK compteurs ≥ 0` | **un contact actif par adresse et organisation** ; une même personne est un contact distinct dans chaque organisation ; fusion intra-tenant |
+| `contact_identities`                                  | `UNIQUE (organization_id, kind, value) WHERE kind <> 'phone'`, `UNIQUE (contact_id, kind, value)`, `CHECK e-mail en minuscules`, FK composite contact                                                                                                                                      | un e-mail ou un compte ne pointe qu'un contact par organisation ; un téléphone peut être partagé (foyer)                                    |
+| `contact_tags` / `contact_tag_assignments`            | `UNIQUE (organization_id, slug)`, `UNIQUE (contact_id, tag_id)`, FK composites                                                                                                                                                                                                             | étiquettes par organisation, sans doublon par contact                                                                                       |
+| `consent_records`                                     | `UNIQUE (organization_id, source, source_id, status) WHERE source_id IS NOT NULL`, `CHECK evidence 1–1000`, FK composite ; **append-only** (aucune commande de mise à jour ni de suppression)                                                                                              | journal de consentement inaltérable et rejouable (une commande donne un enregistrement, pas deux)                                           |
+| `contact_suppressions`                                | `UNIQUE (organization_id, email) WHERE lifted_at IS NULL`, `CHECK email = lower(email)`, `CHECK lifted ⇒ lift_reason ≥ 3`                                                                                                                                                                  | une exclusion active par adresse ; **une levée est toujours motivée**                                                                       |
+| `contact_merge_records`                               | `CHECK surviving <> merged`, FK composites ; append-only                                                                                                                                                                                                                                   | trace et instantané de chaque fusion                                                                                                        |
+| `segments` / `segment_members`                        | `UNIQUE (organization_id, slug)`, `UNIQUE (segment_id, contact_id)`, FK composites segment / contact                                                                                                                                                                                       | segments par organisation ; membres jamais d'un autre tenant                                                                                |
+| infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                                                                   | idempotence, relais, surcharge par organisation                                                                                             |
 
 Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).
 
@@ -813,3 +945,5 @@ La machine à états des événements (`draft → published → completed | canc
 Le dernier propriétaire est protégé par règle métier (transaction avec `SELECT … FOR UPDATE` sur l'organisation), pas par contrainte SQL : PostgreSQL ne peut pas exprimer « au moins une ligne » sans trigger ; un trigger pourra être ajouté en phase 10 si l'audit le recommande.
 
 La machine à états des versions de planning (`draft → generating → proposed | generation_failed`, `proposed → under_review → published → superseded`, `draft → published` possible après édition manuelle) vit dans `packages/domain/src/scheduling/state-machine.ts`. Les contraintes dures du moteur (disponibilité, compétences obligatoires, âge, chevauchement, repos minimal, heures max par jour, effectif max) ne sont pas exprimées en SQL : elles sont revérifiées **en transaction, sur les données actuelles**, à chaque affectation manuelle et à la publication (verrou `FOR UPDATE` sur l'événement, `version` pour la concurrence optimiste).
+
+Le statut marketing d'un contact (`marketing_email_status`) est une dénormalisation **dérivée** du journal `consent_records` et des exclusions, recalculée par le domaine (`refreshContact`) après chaque point de contact, consentement manuel, exclusion, levée ou fusion : exclusion > dernier enregistrement explicite (`opted_in` / `withdrawn`) > exception client (`customer_only`) > `none`. Une commande ou une adhésion sans case cochée produit un enregistrement `customer_exception` (base légale de l'exception « client existant », art. L.34-5 CPCE) qui ne vaut jamais `opted_in` et ne re-consent jamais après un retrait.

@@ -19,6 +19,7 @@ export interface OrgNavProps {
     memberships: boolean;
     volunteers: boolean;
     planning: boolean;
+    contacts: boolean;
     team: boolean;
     settings: boolean;
   };
@@ -93,6 +94,16 @@ export function OrgShell({
           },
         ]
       : []),
+    ...(sections.contacts
+      ? [
+          {
+            href: `${base}/contacts`,
+            label: "Contacts",
+            icon: "◍",
+            active: pathname.startsWith(`${base}/contacts`),
+          },
+        ]
+      : []),
     ...(sections.team
       ? [
           {
@@ -139,7 +150,9 @@ export function OrgShell({
                   ? "Bénévoles"
                   : crumbs[0] === "planning"
                     ? "Planning"
-                    : "Vue d'ensemble";
+                    : crumbs[0] === "contacts"
+                      ? "Contacts"
+                      : "Vue d'ensemble";
 
   return (
     <OrganizationShell

@@ -3,6 +3,7 @@ import { schema } from "@kroov/database";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
+import { recordTouchpoint } from "../crm";
 import {
   type Actor,
   actorLabel,
@@ -359,6 +360,19 @@ async function activate(
     })
     .onConflictDoNothing();
   await recordValidityChange(tx, actor, m, "activated", validity, null);
+  await recordTouchpoint(tx, {
+    organizationId: m.organizationId,
+    source: "membership",
+    sourceId: m.id,
+    sourceLabel: `adhésion ${m.number}`,
+    email: m.memberEmail,
+    firstName: m.memberFirstName,
+    lastName: m.memberLastName,
+    userId: m.userId,
+    occurredAt: now,
+    marketingOptIn: m.marketingOptIn,
+    customerRelationship: m.priceMinor > 0,
+  });
   await recordAudit(tx, actor, {
     organizationId: m.organizationId,
     action: "membership.activated",

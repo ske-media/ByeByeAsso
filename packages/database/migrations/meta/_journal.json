@@ -50,6 +50,13 @@
       "when": 1793195657232,
       "tag": "0006_scheduling",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793200067263,
+      "tag": "0007_crm",
+      "breakpoints": true
     }
   ]
 }

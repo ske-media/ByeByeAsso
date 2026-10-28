@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.6.0-phase6
+  version: 0.7.0-phase7
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -35,6 +35,12 @@ info:
     seule la publication humaine (`POST …/publish`, jeton `expectedVersion`, 409 `stale_version`, 412 `conflicts` /
     `unfilled` / `version_immutable`) fait foi et notifie uniquement les bénévoles dont les missions changent.
     Les routes `/public/volunteer-applications/{id}/missions*` sont authentifiées par le jeton candidat.
+
+    Contacts (phase 7) : base de contacts PAR ORGANISATION, jamais partagée (même adresse ailleurs = autre contact).
+    Lecture `contacts.read`, écriture `contacts.manage`, export `contacts.export` (audité). Les fiches sont nourries
+    par les commandes payées, adhésions, candidatures et missions publiées ; un achat ou une adhésion ne vaut
+    JAMAIS consentement marketing (`customer_only` ≠ `opted_in`). Journal de consentement append-only, exclusions
+    par adresse levées seulement avec motif, segments recalculés à chaque usage. Aucune route publique.
 
     Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
     Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
@@ -1198,6 +1204,245 @@ components:
               coveredCount: { type: integer }
               openRequests: { type: integer }
               pendingConfirmations: { type: integer }
+    Contact:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: [string, "null"] }
+        lastName: { type: [string, "null"] }
+        name: { type: string }
+        city: { type: [string, "null"] }
+        status: { type: string, enum: [active, merged, archived] }
+        marketingEmailStatus: { $ref: "#/components/schemas/MarketingEmailStatus" }
+        source: { $ref: "#/components/schemas/CrmSource" }
+        tags: { type: array, items: { $ref: "#/components/schemas/ContactTag" } }
+        ordersCount: { type: integer }
+        ticketsCount: { type: integer }
+        membershipsCount: { type: integer }
+        applicationsCount: { type: integer }
+        missionsCount: { type: integer }
+        hasAccount: { type: boolean }
+        lastActivityAt: { type: [string, "null"], format: date-time }
+        firstSeenAt: { type: string, format: date-time }
+    MarketingEmailStatus:
+      type: string
+      description: "Dérivé du journal : suppressed > dernier enregistrement explicite (opted_in / withdrawn) > customer_only > none"
+      enum: [none, opted_in, customer_only, withdrawn, suppressed]
+    CrmSource:
+      type: string
+      enum: [order, membership, volunteer_application, schedule, staff, public_form, import, system]
+    ContactInput:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+        firstName: { type: string, maxLength: 80 }
+        lastName: { type: string, maxLength: 80 }
+        phone: { type: string, maxLength: 40 }
+        city: { type: string, maxLength: 120 }
+    ContactDetail:
+      allOf:
+        - { $ref: "#/components/schemas/Contact" }
+        - type: object
+          properties:
+            phone: { type: [string, "null"] }
+            userId: { type: [string, "null"], format: uuid }
+            mergedIntoContactId: { type: [string, "null"], format: uuid }
+            version: { type: integer }
+            identities:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  kind: { type: string, enum: [email, phone, user] }
+                  value: { type: string }
+                  verified: { type: boolean }
+                  isPrimary: { type: boolean }
+            consents: { type: array, items: { $ref: "#/components/schemas/ConsentRecord" } }
+            suppression:
+              oneOf:
+                - type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    reason: { $ref: "#/components/schemas/SuppressionReason" }
+                    note: { type: [string, "null"] }
+                    createdAt: { type: string, format: date-time }
+                - { type: "null" }
+            notes:
+              type: array
+              description: "Notes internes — uniquement dans les routes organisateur"
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  body: { type: string }
+                  pinned: { type: boolean }
+                  author: { type: [string, "null"] }
+                  createdAt: { type: string, format: date-time }
+            orders: { type: array, items: { type: object } }
+            memberships: { type: array, items: { type: object } }
+            applications: { type: array, items: { type: object } }
+            missions: { type: array, items: { type: object } }
+            merges: { type: array, items: { type: object } }
+            timeline:
+              type: array
+              items:
+                type: object
+                properties:
+                  key: { type: string }
+                  at: { type: string, format: date-time }
+                  kind: { type: string, enum: [order, membership, application, mission, consent, merge] }
+                  title: { type: string }
+                  detail: { type: [string, "null"] }
+                  href: { type: [string, "null"] }
+    ConsentRecord:
+      type: object
+      description: "Append-only : jamais modifié ni supprimé"
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [granted, withdrawn] }
+        basis: { type: string, enum: [explicit_opt_in, customer_exception, manual, import] }
+        source: { $ref: "#/components/schemas/CrmSource" }
+        evidence: { type: string, description: "preuve lisible (case cochée sur la commande X, bulletin papier…)" }
+        occurredAt: { type: string, format: date-time }
+        recordedBy: { type: [string, "null"] }
+    ManualConsentInput:
+      type: object
+      required: [status, evidence]
+      properties:
+        status: { type: string, enum: [granted, withdrawn] }
+        evidence: { type: string, minLength: 5, maxLength: 1000 }
+        occurredAt: { type: string, format: date-time }
+    ContactTag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        color: { type: string, enum: [lime, lavender, orange, pink, neutral] }
+        count: { type: integer, description: "contacts actifs portant l'étiquette (listes)" }
+    ContactStats:
+      type: object
+      properties:
+        total: { type: integer }
+        optedIn: { type: integer }
+        customerOnly: { type: integer }
+        suppressed: { type: integer }
+        newLast30Days: { type: integer }
+        withAccount: { type: integer }
+    SuppressionReason:
+      type: string
+      enum: [unsubscribed, bounced, complaint, manual, erased]
+    Suppression:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        reason: { $ref: "#/components/schemas/SuppressionReason" }
+        source: { $ref: "#/components/schemas/CrmSource" }
+        note: { type: [string, "null"] }
+        createdBy: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        liftedAt: { type: [string, "null"], format: date-time }
+        liftReason: { type: [string, "null"] }
+    SegmentRule:
+      oneOf:
+        - type: object
+          required: [type, tagIds]
+          properties:
+            type: { const: tag }
+            op: { type: string, enum: [in, not_in], default: in }
+            tagIds: { type: array, items: { type: string, format: uuid } }
+        - type: object
+          required: [type, statuses]
+          properties:
+            type: { const: marketing_email }
+            statuses: { type: array, items: { $ref: "#/components/schemas/MarketingEmailStatus" } }
+        - type: object
+          required: [type, eventIds]
+          properties:
+            type: { const: event }
+            relation: { type: string, enum: [ordered, attended, volunteered, assigned], default: ordered }
+            eventIds: { type: array, items: { type: string, format: uuid } }
+        - type: object
+          required: [type]
+          properties:
+            type: { const: membership }
+            state: { type: string, enum: [active, expired, never, any], default: active }
+            planIds: { type: array, items: { type: string, format: uuid } }
+        - type: object
+          required: [type]
+          properties:
+            type: { const: orders }
+            minCount: { type: integer }
+            minTotalMinor: { type: integer }
+        - type: object
+          required: [type]
+          properties:
+            type: { const: activity }
+            after: { type: string, format: date-time }
+            before: { type: string, format: date-time }
+        - type: object
+          required: [type, sources]
+          properties:
+            type: { const: source }
+            sources: { type: array, items: { $ref: "#/components/schemas/CrmSource" } }
+        - type: object
+          required: [type, q]
+          properties:
+            type: { const: search }
+            q: { type: string }
+    SegmentDefinition:
+      type: object
+      description: "Règles combinées en ET (all) ou OU (any) ; toute référence (étiquette, événement, formule) doit appartenir à l'organisation (422 sinon)"
+      properties:
+        match: { type: string, enum: [all, any], default: all }
+        rules: { type: array, maxItems: 20, items: { $ref: "#/components/schemas/SegmentRule" } }
+    Segment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: [string, "null"] }
+        kind: { type: string, enum: [dynamic, static] }
+        definition: { $ref: "#/components/schemas/SegmentDefinition" }
+        memberCount: { type: [integer, "null"], description: "dernier calcul (dynamique) ou membres (statique)" }
+        computedAt: { type: [string, "null"], format: date-time }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+    SegmentInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 120 }
+        slug: { type: string }
+        description: { type: string, maxLength: 500 }
+        kind: { type: string, enum: [dynamic, static], default: dynamic }
+        definition: { $ref: "#/components/schemas/SegmentDefinition" }
+    SegmentEvaluation:
+      type: object
+      properties:
+        count: { type: integer }
+        consented: { type: integer, description: "parmi les correspondants, ceux en opted_in" }
+        sample:
+          {
+            type: array,
+            items:
+              {
+                type: object,
+                properties:
+                  {
+                    id: { type: string },
+                    email: { type: string },
+                    name: { type: string },
+                    marketingEmailStatus: { $ref: "#/components/schemas/MarketingEmailStatus" },
+                  },
+              },
+          }
+        computedAt: { type: string, format: date-time }
   responses:
     Unauthenticated:
       {
@@ -3320,6 +3565,382 @@ paths:
         "200": { description: OK }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: Une demande est déjà ouverte }
+  /organizations/{organizationId}/contacts:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: q, in: query, schema: { type: string } }
+      - { name: status, in: query, schema: { type: string, enum: [active, archived, merged, all], default: active } }
+      - { name: marketing, in: query, schema: { $ref: "#/components/schemas/MarketingEmailStatus" } }
+      - { name: tagId, in: query, schema: { type: string, format: uuid } }
+      - { name: source, in: query, schema: { $ref: "#/components/schemas/CrmSource" } }
+      - {
+          name: eventId,
+          in: query,
+          schema: { type: string, format: uuid },
+          description: "a commandé pour cet événement",
+        }
+      - { name: segmentId, in: query, schema: { type: string, format: uuid } }
+      - { name: sort, in: query, schema: { type: string, enum: [activity, name, created], default: activity } }
+      - { name: page, in: query, schema: { type: integer, default: 1 } }
+      - { name: pageSize, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+    get:
+      summary: Contacts de l'organisation (contacts.read) avec indicateurs
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      contacts: { type: array, items: { $ref: "#/components/schemas/Contact" } }
+                      total: { type: integer }
+                      page: { type: integer }
+                      pageSize: { type: integer }
+                      stats: { $ref: "#/components/schemas/ContactStats" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: "Créer un contact à la main (contacts.manage) — sans consentement"
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ContactInput" } } } }
+      responses:
+        "201":
+          {
+            description: Créé (ou archivé restauré),
+            content: { application/json: { schema: { $ref: "#/components/schemas/Contact" } } },
+          }
+        "409": { description: Un contact vivant porte déjà cette adresse }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/contacts/duplicates:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: "Doublons probables (même téléphone, même nom) — jamais fusionnés automatiquement"
+      responses:
+        "200": { description: "{ groups: [{ kind, key, contacts }] }" }
+  /organizations/{organizationId}/contacts/export:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: "Export CSV (contacts.export, audité avec le nombre de lignes) — mêmes filtres que la liste, sans notes internes"
+      responses:
+        "200": { description: "text/csv (UTF-8 BOM, séparateur ;), en-tête X-Row-Count" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /organizations/{organizationId}/contacts/{contactId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Fiche 360° (identités, journal de consentement, notes, historique, fusions)
+      responses:
+        "200":
+          { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ContactDetail" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: "Modifier l'identité (contacts.manage) — statut, compteurs et consentement ne sont jamais patchables"
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      allOf:
+                        [
+                          { $ref: "#/components/schemas/ContactInput" },
+                          { type: object, properties: { version: { type: integer, description: "jeton optimiste" } } },
+                        ],
+                    },
+                },
+            },
+        }
+      responses:
+        "200": { description: OK }
+        "409": { description: "stale_version, ou adresse déjà portée par un autre contact (fusionnez)" }
+        "412": { description: Fiche fusionnée }
+  /organizations/{organizationId}/contacts/{contactId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [archive, restore] } }
+    post:
+      summary: "Archiver (sort des listes et segments, restauré à la prochaine activité) / restaurer"
+      responses:
+        "200": { description: OK }
+  /organizations/{organizationId}/contacts/{contactId}/notes:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Note interne (contacts.manage)
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [body],
+                      properties: { body: { type: string, maxLength: 4000 }, pinned: { type: boolean } },
+                    },
+                },
+            },
+        }
+      responses:
+        "201": { description: Créée }
+  /organizations/{organizationId}/contacts/{contactId}/notes/{noteId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: noteId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Supprimer une note
+      responses:
+        "204": { description: Supprimée }
+  /organizations/{organizationId}/contacts/{contactId}/tags:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      summary: Remplacer les étiquettes du contact
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [tagIds],
+                      properties: { tagIds: { type: array, items: { type: string, format: uuid } } },
+                    },
+                },
+            },
+        }
+      responses:
+        "200": { description: "{ tags }" }
+        "404": { description: Étiquette inconnue dans cette organisation }
+  /organizations/{organizationId}/contacts/{contactId}/consents:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: "Enregistrement manuel de consentement (accordé / retiré) avec preuve obligatoire — append-only"
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/ManualConsentInput" } } },
+        }
+      responses:
+        "201": { description: "{ consent, marketingEmailStatus }" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/contacts/{contactId}/merge:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: "Fusionner `mergedContactId` DANS ce contact (survivant) — irréversible, instantané conservé"
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [mergedContactId],
+                      properties: { mergedContactId: { type: string, format: uuid }, reason: { type: string } },
+                    },
+                },
+            },
+        }
+      responses:
+        "200": { description: "{ survivor, mergeRecordId }" }
+        "404": { description: Contact à fusionner inconnu dans cette organisation }
+        "412": { description: Les deux fiches doivent être actives }
+  /organizations/{organizationId}/contact-tags:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Étiquettes de l'organisation avec effectifs
+      responses:
+        "200": { description: "{ tags }" }
+    post:
+      summary: Créer une étiquette (contacts.manage)
+      responses:
+        "201":
+          { description: Créée, content: { application/json: { schema: { $ref: "#/components/schemas/ContactTag" } } } }
+        "409": { description: Nom déjà utilisé }
+  /organizations/{organizationId}/contact-tags/{tagId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: tagId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Renommer / recolorer
+      responses: { "200": { description: OK } }
+    delete:
+      summary: Supprimer (les affectations suivent)
+      responses: { "204": { description: Supprimée } }
+  /organizations/{organizationId}/suppressions:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: scope, in: query, schema: { type: string, enum: [active, all], default: active } }
+    get:
+      summary: Liste d'exclusion (consultable sans réinscrire personne)
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          { suppressions: { type: array, items: { $ref: "#/components/schemas/Suppression" } } },
+                      },
+                  },
+              },
+          }
+    post:
+      summary: "Exclure une adresse (contacts.manage ; phase 8 : désinscription et rebonds par le système). Idempotent."
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [email],
+                      properties:
+                        {
+                          email: { type: string, format: email },
+                          reason: { $ref: "#/components/schemas/SuppressionReason" },
+                          note: { type: string },
+                        },
+                    },
+                },
+            },
+        }
+      responses:
+        "201": { description: "{ id, created }" }
+  /organizations/{organizationId}/suppressions/{suppressionId}/lift:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: suppressionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: "Lever une exclusion — motif obligatoire, tracé (jamais automatique)"
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema: { type: object, required: [reason], properties: { reason: { type: string, minLength: 3 } } },
+                },
+            },
+        }
+      responses:
+        "200": { description: Levée }
+        "412": { description: Déjà levée }
+  /organizations/{organizationId}/segments:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Segments (non archivés)
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { segments: { type: array, items: { $ref: "#/components/schemas/Segment" } } },
+                      },
+                  },
+              },
+          }
+    post:
+      summary: "Créer un segment (contacts.manage) ; un segment dynamique est calculé immédiatement"
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SegmentInput" } } } }
+      responses:
+        "201":
+          { description: Créé, content: { application/json: { schema: { $ref: "#/components/schemas/Segment" } } } }
+        "422": { description: Référence hors organisation (étiquette, événement, formule) }
+  /organizations/{organizationId}/segments/preview:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: "Évaluer une définition maintenant (contacts.read)"
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/SegmentDefinition" } } },
+        }
+      responses:
+        "200":
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: "#/components/schemas/SegmentEvaluation" } } },
+          }
+        "422": { description: Référence hors organisation }
+  /organizations/{organizationId}/segments/{segmentId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: segmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: "Segment + évaluation (dynamique : recalcul ; statique : membres)"
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Modifier (version = jeton optimiste)
+      responses:
+        "200": { description: OK }
+        "409": { $ref: "#/components/responses/StaleVersion" }
+    delete:
+      summary: Archiver
+      responses: { "204": { description: Archivé } }
+  /organizations/{organizationId}/segments/{segmentId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: segmentId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [evaluate, members] } }
+    post:
+      summary: "evaluate (recalcul et mémorisation du nombre) · members ({ add, remove } sur un segment statique, 412 sinon)"
+      responses:
+        "200": { description: OK }
+        "412": { description: Les membres d'un segment dynamique sont calculés }
+  /organizations/{organizationId}/crm/rebuild:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: "Rejouer tout l'historique (commandes, adhésions, candidatures) dans la base — idempotent, audité"
+      responses:
+        "200": { description: "{ touched, skipped }" }
   /payments/webhooks/{provider}:
     parameters:
       - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, fake] } }

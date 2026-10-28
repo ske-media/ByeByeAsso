@@ -1,6 +1,6 @@
 # Kroov — Architecture
 
-Version : Phase 6 (planning intelligent) · 28 octobre 2026.
+Version : Phase 7 (CRM et consentements) · 28 octobre 2026.
 
 Kroov est un **monolithe modulaire** TypeScript strict déployé en deux processus (web + worker) autour d'une base PostgreSQL unique et autoritaire. Les modules métier vivent dans `packages/domain` et exposent chacun une API publique ; aucune table n'est manipulée depuis un module étranger.
 
@@ -94,7 +94,7 @@ infra                 docker-compose (Postgres, MinIO, Mailpit)
 4. Les routes (`apps/web`) ne contiennent aucune règle métier : validation → appel de service avec un `Actor` → mapping des erreurs.
 5. Les effets de bord inter-modules passent par des événements typés écrits dans `outbox_events` **dans la même transaction** que la modification d'état.
 
-Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7), marketing (8), analytics/tasks (9), billing/audit (transverses, à partir de 1).
+Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8), analytics/tasks (9), billing/audit (transverses, à partir de 1).
 
 ## 5. Noyau partagé (`packages/domain/src/kernel`)
 
@@ -178,6 +178,17 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Côté bénévole : `active_volunteer_commitments` (vue SQL) et « mes missions » ne montrent que la version publiée — jamais une proposition. Confirmer une mission ; signaler une indisponibilité **n'enlève jamais** l'affectation : elle passe en `declined` et ouvre une demande d'arbitrage (une seule ouverte par mission) que l'équipe traite ou écarte. Présence pointable uniquement sur la version publiée (`volunteers.schedule` ou `checkins.scan`).
 - Explicabilité : la vue de version expose, par créneau, les personnes affectables, les personnes écartées **et pourquoi**, les conflits sur données actuelles, les verrous invalides, la charge (missions, heures) par bénévole et les bloqueurs de publication. L'affectation manuelle applique les mêmes contraintes dures et répond 412 avec la raison lisible.
 - Autorisation : tout sous `volunteers.schedule` au périmètre événement ; routes publiques `/missions*` sous jeton candidat (404 uniforme). Les motivations internes (notes de version, demandes) ne sortent pas des routes organisateur.
+
+## 7octies. CRM et consentements (phase 7)
+
+- Domaine `packages/domain/src/crm` : `identities.ts` (normalisation e-mail / téléphone E.164, `deriveMarketingStatus`, libellés, échappement CSV anti-injection de formule), `schemas.ts`, `contacts.ts` (points de contact, reconstruction, liste / statistiques / fiche 360°, création et édition manuelles, archivage, notes, étiquettes, consentement manuel, exclusions, doublons, fusion, export), `segments.ts` (compilation des règles en prédicats SQL, évaluation, CRUD, matérialisation, membres statiques).
+- **Une base par organisation, jamais partagée** : toutes les tables portent `organization_id` et des FK composites ; la même adresse ou le même compte dans deux organisations donne deux contacts indépendants (test d'intégration et S9). Aucune route publique dans cette phase.
+- **Alimentation synchrone (règle de dépendance n° 3)** : ticketing (`markOrderPaid`), memberships (activation), volunteers (dépôt et décision) et scheduling (publication) appellent `recordTouchpoint(tx, …)` dans **leur** transaction ; la commande ne lève jamais d'erreur pour une adresse invalide (un paiement ne doit pas échouer à cause du CRM). `rebuildContacts` rejoue tout l'historique de façon idempotente (identités et consentements clés par source). `refreshContact` recalcule compteurs, dernière activité et statut marketing depuis les sources de vérité.
+- **Consentement** : journal `consent_records` append-only avec base légale et preuve lisible. Case cochée → `explicit_opt_in` ; achat ou adhésion payante sans case → `customer_exception` (`customer_only`, **jamais** `opted_in`, exclu par défaut des audiences) ; candidature bénévole → aucune relation client. Saisie manuelle avec preuve obligatoire ; un retrait reste final jusqu'à un nouveau consentement explicite, une exception client ultérieure ne re-consent pas. Exclusions par **adresse** (survivent aux fusions et archivages), levées uniquement par action motivée et auditée ; la phase 8 y écrit les désinscriptions et rebonds via `suppressEmail`.
+- **Segments** : définition jsonb validée (Zod, références vérifiées dans l'organisation → 422), compilée en SQL avec sous-requêtes bornées au tenant (identités e-mail du contact ↔ commandes, billets contrôlés, candidatures acceptées, missions publiées, adhésions) ; aperçu en direct ; segments dynamiques recalculés à chaque usage (nombre mémorisé pour les listes), statiques tenus à la main. Les contacts archivés sont toujours exclus.
+- **Fusion** : verrou `FOR UPDATE` des deux fiches dans un ordre stable, instantané jsonb de la fiche fusionnée, identités / étiquettes / notes / consentements / appartenances rattachés, survivant complété sans écrasement, fusionnée en `merged` (lecture seule, chaînée). Irréversible et documentée comme telle ; les doublons (même téléphone, même nom) sont seulement proposés.
+- **Export** : CSV UTF-8 BOM `;`, sans notes internes, cellules échappées, `contacts.export` requis, audit `contacts.exported` avec filtres et nombre de lignes.
+- Autorisation : `contacts.read` (lecture, aperçu de segment), **`contacts.manage`** (nouvelle permission : fiches, notes, étiquettes, consentements, exclusions, segments, fusions, reconstruction) attribuée aux rôles owner, admin, responsable événement, marketing, billetterie ; `contacts.export`. Un responsable limité à un événement n'a pas de lecture organisation (403).
 
 ## 8. Sécurité (fondation)
 

@@ -4,6 +4,7 @@ import { schema } from "@kroov/database";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
+import { recordTouchpoint } from "../crm";
 import { type Actor, ConflictError, NotFoundError, PreconditionFailedError } from "../kernel";
 import { emitDomainEvent } from "../outbox";
 import { deriveToken, hashToken, tokensEqual } from "../ticketing/context";
@@ -1269,6 +1270,22 @@ export async function publishVersion(
         .update(schema.volunteerApplications)
         .set({ status: target, version: app.version + 1 })
         .where(eq(schema.volunteerApplications.id, app.id));
+    }
+    // CRM (phase 7): every volunteer concerned by this publication is a touchpoint (mission counters).
+    for (const app of apps) {
+      await recordTouchpoint(tx, {
+        organizationId,
+        source: "schedule",
+        sourceId: row.id,
+        sourceLabel: `planning V${row.number}`,
+        email: app.email,
+        firstName: app.firstName,
+        lastName: app.lastName,
+        phone: app.phone,
+        userId: app.userId,
+        occurredAt: now,
+        marketingOptIn: null,
+      });
     }
     await emitDomainEvent(tx, {
       aggregateType: "schedule_version",
