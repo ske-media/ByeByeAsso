@@ -36,6 +36,7 @@ export const QUEUES = {
   paymentsReconcile: "payments.reconcile",
   membershipsExpire: "memberships.expire",
   membershipsRemind: "memberships.remind",
+  campaignsDispatch: "campaigns.dispatch",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

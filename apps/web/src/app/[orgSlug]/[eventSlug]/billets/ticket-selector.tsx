@@ -4,6 +4,7 @@ import { Alert, Button, FormField, Input, Panel } from "@kroov/ui";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { fmtMinor } from "@/lib/money";
+import { AttributionKeeper, currentAttribution } from "../attribution";
 
 export interface SelectableType {
   id: string;
@@ -87,6 +88,7 @@ export function TicketSelector({
           eventSlug,
           items,
           ...(needsMemberEmail ? { email: memberEmail.trim() } : {}),
+          ...(currentAttribution() ? { attribution: currentAttribution() } : {}),
         }),
       });
       const json = (await res.json()) as { data?: { id: string; accessToken: string }; error?: { message?: string } };
@@ -105,6 +107,7 @@ export function TicketSelector({
 
   return (
     <div className="space-y-4">
+      <AttributionKeeper />
       {types.map((t) => {
         const n = qty[t.id] ?? 0;
         const disabled = t.saleState !== "on_sale";

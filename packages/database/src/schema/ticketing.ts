@@ -16,10 +16,11 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./_shared";
+import { id, lazyForeignKey, timestamps } from "./_shared";
 import { users } from "./auth";
 import { events } from "./events";
 import { organizations } from "./identity";
+import { campaignRecipients, campaigns, trackingLinks } from "./marketing";
 
 /**
  * TICKETING + PAYMENTS domains (phase 3).
@@ -192,11 +193,34 @@ export const orders = pgTable(
     expiresAt: ts("expires_at"),
     paidAt: ts("paid_at"),
     marketingOptIn: boolean("marketing_opt_in").notNull().default(false),
+    /**
+     * Campaign attribution (phase 8), set at reservation when the buyer arrived through a valid
+     * tracked campaign link. Link-level evidence only — never an identity resolution by e-mail.
+     */
+    campaignId: uuid("campaign_id"),
+    trackingLinkId: uuid("tracking_link_id"),
+    campaignRecipientId: uuid("campaign_recipient_id"),
     version: integer("version").notNull().default(1),
     ...timestamps(),
   },
   (t) => [
     unique("orders_org_id_uq").on(t.organizationId, t.id),
+    index("orders_campaign_idx").on(t.campaignId, t.status),
+    lazyForeignKey(() => ({
+      name: "orders_campaign_fk",
+      columns: [t.organizationId, t.campaignId],
+      foreignColumns: [campaigns.organizationId, campaigns.id],
+    })).onDelete("set null"),
+    lazyForeignKey(() => ({
+      name: "orders_tracking_link_fk",
+      columns: [t.organizationId, t.trackingLinkId],
+      foreignColumns: [trackingLinks.organizationId, trackingLinks.id],
+    })).onDelete("set null"),
+    lazyForeignKey(() => ({
+      name: "orders_campaign_recipient_fk",
+      columns: [t.organizationId, t.campaignRecipientId],
+      foreignColumns: [campaignRecipients.organizationId, campaignRecipients.id],
+    })).onDelete("set null"),
     uniqueIndex("orders_org_number_uq").on(t.organizationId, t.number),
     uniqueIndex("orders_access_token_uq").on(t.accessTokenHash),
     foreignKey({

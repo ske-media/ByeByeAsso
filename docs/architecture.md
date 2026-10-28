@@ -1,6 +1,6 @@
 # Kroov — Architecture
 
-Version : Phase 7 (CRM et consentements) · 28 octobre 2026.
+Version : Phase 8 (marketing responsable) · 28 octobre 2026.
 
 Kroov est un **monolithe modulaire** TypeScript strict déployé en deux processus (web + worker) autour d'une base PostgreSQL unique et autoritaire. Les modules métier vivent dans `packages/domain` et exposent chacun une API publique ; aucune table n'est manipulée depuis un module étranger.
 
@@ -94,7 +94,7 @@ infra                 docker-compose (Postgres, MinIO, Mailpit)
 4. Les routes (`apps/web`) ne contiennent aucune règle métier : validation → appel de service avec un `Actor` → mapping des erreurs.
 5. Les effets de bord inter-modules passent par des événements typés écrits dans `outbox_events` **dans la même transaction** que la modification d'état.
 
-Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8), analytics/tasks (9), billing/audit (transverses, à partir de 1).
+Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8 — livré), analytics/tasks (9), billing/audit (transverses, à partir de 1).
 
 ## 5. Noyau partagé (`packages/domain/src/kernel`)
 
@@ -122,6 +122,7 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, marquage `dispatched`, backoff par ligne, échec définitif après 10 tentatives. Balayage de sûreté chaque minute ; les producteurs déclencheront le relais directement après commit (phase 1).
 - Maintenance : purge horaire des `idempotency_records` expirés, heartbeat chaque minute.
 - Billetterie (phase 3) : `orders.expire-holds` chaque minute (réservations échues → `expired`, places libérées, billets `pending` → `revoked`) ; `payments.reconcile` toutes les 10 min (paiements `pending` depuis > 15 min réinterrogés chez le prestataire et traités comme leur webhook).
+- Marketing (phase 8) : `campaigns.dispatch` chaque minute — campagnes programmées échues (ou laissées `sending` par une panne) réclamées sous `FOR UPDATE SKIP LOCKED`, audience revalidée, envoi par lots avec tentatives bornées.
 - Événements (phase 2) : `events.complete-ended` chaque heure — les événements publiés terminés depuis plus de 24 h passent `completed` (acteur `system`, audit + outbox `event.completed`).
 - Arrêt propre sur SIGINT/SIGTERM (`stop({ graceful: true })`, fermeture du pool).
 
@@ -189,6 +190,16 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - **Fusion** : verrou `FOR UPDATE` des deux fiches dans un ordre stable, instantané jsonb de la fiche fusionnée, identités / étiquettes / notes / consentements / appartenances rattachés, survivant complété sans écrasement, fusionnée en `merged` (lecture seule, chaînée). Irréversible et documentée comme telle ; les doublons (même téléphone, même nom) sont seulement proposés.
 - **Export** : CSV UTF-8 BOM `;`, sans notes internes, cellules échappées, `contacts.export` requis, audit `contacts.exported` avec filtres et nombre de lignes.
 - Autorisation : `contacts.read` (lecture, aperçu de segment), **`contacts.manage`** (nouvelle permission : fiches, notes, étiquettes, consentements, exclusions, segments, fusions, reconstruction) attribuée aux rôles owner, admin, responsable événement, marketing, billetterie ; `contacts.export`. Un responsable limité à un événement n'a pas de lecture organisation (403).
+
+## 7nonies. Marketing responsable (phase 8)
+
+- Domaine `packages/domain/src/marketing` : `render.ts` (Markdown restreint → HTML responsive en tables + texte, personnalisation `{{prenom}}` / `{{nom}}` / `{{organisation}}` / `{{email}}`, échappement systématique, liens réécrits vers le suivi, paramètres de source), `state-machine.ts`, `schemas.ts`, `campaigns.ts` (gabarits, brouillons, aperçu, e-mail de test, recomptage d'audience, programmation / déprogrammation / annulation, `dispatchDueCampaigns` + `runCampaign`, destinataires, rapport, clic suivi, attribution, désinscription, rappels fournisseur), `webhooks.ts` (vérification des signatures Kroov HMAC et svix/Resend).
+- **Éligibilité à l'envoi, jamais depuis l'instantané** : `computeAudience` lit le segment (dynamique → `resolveDefinition`, statique → membres), puis exclut par ordre : adresse invalide, exclusion active (`contact_suppressions`), `customer_only` sans décision d'exception, statut ≠ `opted_in`, doublon d'adresse. Exécutée à la vérification (écran 21), à la programmation (instantané `schedule`) et **au lancement** (instantané `dispatch`, création des `campaign_recipients` `pending` / `skipped` avec motif).
+- **Envoi asynchrone par lots** (`campaigns.dispatch`, chaque minute) : campagnes `scheduled` échues ou `sending` orphelines réclamées sous `FOR UPDATE SKIP LOCKED` ; lots de `CAMPAIGN_BATCH_SIZE` destinataires `pending` verrouillés `SKIP LOCKED` (plusieurs workers possibles) ; une `message_delivery` par tentative ; échec → `attempts + 1`, `failed` après 3 ; `sent` jamais renvoyé ; clôture `sent` / `partially_failed` / `failed` + audit + outbox `campaign.finished`. Pas de suivi d'ouverture.
+- **Désinscription** : lien visible `/desinscription/<recipientId>.<HMAC>` (page publique, sans connexion) et en-tête `List-Unsubscribe` (+ `List-Unsubscribe-Post` one-click) vers `/api/v1/public/unsubscribe/{ref}` ; effet = `suppressEmail(unsubscribed, source system)` (le CRM recalcule le statut), destinataire `unsubscribed`, événement de suivi ; jeton dérivé jamais stocké, 404 uniforme ; `test` = page explicative sans effet.
+- **Rappels fournisseur** (`/api/v1/email/webhooks/{provider}`) : seul le fournisseur configuré est accepté ; signature sur le corps brut ; `delivered` / `bounced` (dur → exclusion `bounced`) / `complained` (→ exclusion `complaint`) / `failed` ; idempotent par `(provider, provider_message_id)` ; un rebond ne rétrograde jamais une livraison déjà rebondie. Adaptateur **Resend** livré (requête documentée, en-têtes List-Unsubscribe, clé d'idempotence) — vérification externe en attente faute de réseau sortant.
+- **Suivi et attribution** : les liens du corps deviennent `/l/{token}?r=<ref>` ; le clic enregistre un `tracking_event` (destinataire si jeton valide, user-agent tronqué, **jamais d'IP**), incrémente clics / clics uniques, puis redirige **uniquement** vers la cible enregistrée avec `utm_source=kroov`, `utm_medium=email`, `utm_campaign=<slug>` et `kc=<token>.<ref>`. La page publique garde `kc` en session ; la billetterie appelle `resolveAttribution` à la réservation et pose `campaign_id` / `tracking_link_id` / `campaign_recipient_id` sur la commande si la campagne est de la même organisation. Le rapport compte commandes attribuées, commandes payées et chiffre d'affaires **confirmé**, et affiche une mention d'attribution incomplète (pas de résolution d'identité).
+- Autorisation : `campaigns.manage` (brouillons, gabarits, aperçu, test, recomptage, destinataires, rapport) et `campaigns.send` (programmer, déprogrammer, annuler) ; références (segment, gabarit) vérifiées dans l'organisation (422) ; une campagne lancée n'est jamais annulée.
 
 ## 8. Sécurité (fondation)
 

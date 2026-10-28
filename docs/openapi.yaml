@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.7.0-phase7
+  version: 0.8.0-phase8
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -41,6 +41,13 @@ info:
     par les commandes payées, adhésions, candidatures et missions publiées ; un achat ou une adhésion ne vaut
     JAMAIS consentement marketing (`customer_only` ≠ `opted_in`). Journal de consentement append-only, exclusions
     par adresse levées seulement avec motif, segments recalculés à chaque usage. Aucune route publique.
+
+    Marketing (phase 8) : campagnes sous `campaigns.manage` (brouillons, gabarits, aperçu, test, vérification) et
+    `campaigns.send` (programmation, déprogrammation, annulation avant lancement). L'éligibilité (consentement,
+    exclusion, doublon, validité) est revérifiée à l'envoi par le worker ; une campagne lancée n'est jamais annulée.
+    Routes publiques : `GET /l/{token}` (lien suivi → 302 vers la cible enregistrée, sans IP stockée),
+    `/api/v1/public/unsubscribe/{ref}` (désinscription en un clic, référence signée, 404 uniforme) et
+    `POST /api/v1/email/webhooks/{provider}` (rappels de livraison signés, idempotents).
 
     Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
     Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
@@ -1443,6 +1450,153 @@ components:
               },
           }
         computedAt: { type: string, format: date-time }
+    EmailTemplate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        subject: { type: string }
+        preheader: { type: [string, "null"] }
+        body:
+          {
+            type: string,
+            description: "Markdown restreint (titres, paragraphes, gras, liens, listes, bouton `> [Texte](url)`)",
+          }
+    Campaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string, description: "utm_campaign" }
+        status: { type: string, enum: [draft, scheduled, sending, sent, partially_failed, failed, cancelled] }
+        statusLabel: { type: string }
+        subject: { type: string }
+        preheader: { type: [string, "null"] }
+        fromName: { type: string }
+        replyTo: { type: [string, "null"] }
+        body: { type: string }
+        segmentId: { type: [string, "null"], format: uuid }
+        segmentName: { type: [string, "null"] }
+        templateId: { type: [string, "null"], format: uuid }
+        includeCustomerException: { type: boolean }
+        legalNote: { type: [string, "null"] }
+        scheduledAt: { type: [string, "null"], format: date-time }
+        startedAt: { type: [string, "null"], format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        audienceCount: { type: [integer, "null"] }
+        eligibleCount: { type: [integer, "null"] }
+        sentCount: { type: integer }
+        failedCount: { type: integer }
+        skippedCount: { type: integer }
+        error: { type: [string, "null"] }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+    CampaignInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 120 }
+        subject: { type: string, maxLength: 200 }
+        preheader: { type: string, maxLength: 200 }
+        fromName: { type: string, maxLength: 80 }
+        replyTo: { type: string, format: email }
+        body: { type: string, maxLength: 20000 }
+        segmentId: { type: [string, "null"], format: uuid }
+        templateId: { type: [string, "null"], format: uuid }
+    AudienceCheck:
+      type: object
+      description: "Recomptage immédiat ; les motifs d'exclusion sont détaillés"
+      properties:
+        segmentCount: { type: integer }
+        notConsentedCount: { type: integer }
+        customerOnlyCount: { type: integer }
+        suppressedCount: { type: integer }
+        invalidCount: { type: integer }
+        duplicateCount: { type: integer }
+        eligibleCount: { type: integer }
+        computedAt: { type: string, format: date-time }
+        sample:
+          {
+            type: array,
+            items:
+              {
+                type: object,
+                properties: { email: { type: string }, name: { type: string }, status: { type: string } },
+              },
+          }
+    ScheduleInput:
+      type: object
+      properties:
+        sendAt: { type: string, format: date-time, description: "absent = envoi au prochain passage du worker" }
+        includeCustomerException: { type: boolean, default: false }
+        legalNote: { type: string, maxLength: 1000, description: "obligatoire si includeCustomerException" }
+        version: { type: integer }
+    CampaignReport:
+      type: object
+      properties:
+        recipients: { type: object, additionalProperties: { type: integer } }
+        deliveries: { type: object, additionalProperties: { type: integer } }
+        clicks: { type: object, properties: { total: { type: integer }, uniqueRecipients: { type: integer } } }
+        unsubscribes: { type: integer }
+        links:
+          {
+            type: array,
+            items:
+              {
+                type: object,
+                properties:
+                  {
+                    id: { type: string },
+                    targetUrl: { type: string },
+                    clicksCount: { type: integer },
+                    uniqueClicksCount: { type: integer },
+                  },
+              },
+          }
+        attribution:
+          type: object
+          properties:
+            ordersCount: { type: integer }
+            paidOrdersCount: { type: integer }
+            confirmedRevenueMinor: { type: integer }
+            currency: { type: string }
+            disclosure: { type: string, description: "mention explicite de l'attribution incomplète" }
+        audiences: { type: array, items: { type: object } }
+    CampaignDetail:
+      allOf:
+        - { $ref: "#/components/schemas/Campaign" }
+        - type: object
+          properties:
+            report: { $ref: "#/components/schemas/CampaignReport" }
+            preview:
+              {
+                type: object,
+                properties: { subject: { type: string }, text: { type: string }, html: { type: string } },
+              }
+    CampaignRecipient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        contactId: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [pending, sent, failed, skipped, bounced, unsubscribed] }
+        skipReason:
+          { type: [string, "null"], enum: [not_consented, customer_only, suppressed, invalid_email, duplicate, null] }
+        attempts: { type: integer }
+        lastError: { type: [string, "null"] }
+        sentAt: { type: [string, "null"], format: date-time }
+        clicksCount: { type: integer }
+    DeliveryCallback:
+      type: object
+      required: [providerMessageId, event]
+      properties:
+        providerMessageId: { type: string }
+        event: { type: string, enum: [delivered, bounced, complained, failed] }
+        hard: { type: boolean, default: true, description: "rebond dur → adresse exclue" }
+        reason: { type: string }
+        occurredAt: { type: string, format: date-time }
   responses:
     Unauthenticated:
       {
@@ -3941,6 +4095,208 @@ paths:
       summary: "Rejouer tout l'historique (commandes, adhésions, candidatures) dans la base — idempotent, audité"
       responses:
         "200": { description: "{ touched, skipped }" }
+  /organizations/{organizationId}/email-templates:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Gabarits (campaigns.manage)
+      responses:
+        "200": { description: "{ templates }" }
+    post:
+      summary: Créer un gabarit
+      responses:
+        "201":
+          {
+            description: Créé,
+            content: { application/json: { schema: { $ref: "#/components/schemas/EmailTemplate" } } },
+          }
+  /organizations/{organizationId}/email-templates/{templateId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: templateId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier (les champs omis sont conservés)
+      responses: { "200": { description: OK } }
+    delete:
+      summary: Archiver
+      responses: { "204": { description: Archivé } }
+  /organizations/{organizationId}/campaigns:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: status,
+          in: query,
+          schema:
+            {
+              type: string,
+              enum: [all, draft, scheduled, sending, sent, partially_failed, failed, cancelled],
+              default: all,
+            },
+        }
+    get:
+      summary: Campagnes de l'organisation (campaigns.manage)
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { campaigns: { type: array, items: { $ref: "#/components/schemas/Campaign" } } },
+                      },
+                  },
+              },
+          }
+    post:
+      summary: "Créer un brouillon (segment et gabarit vérifiés dans l'organisation : 422 sinon)"
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignInput" } } } }
+      responses:
+        "201":
+          { description: Créée, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+  /organizations/{organizationId}/campaigns/{campaignId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: campaignId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail + rapport (destinataires, livraisons, clics, désinscriptions, attribution) + aperçu
+      responses:
+        "200":
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: "#/components/schemas/CampaignDetail" } } },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: "Modifier un brouillon (412 campaign_locked sinon ; version = jeton optimiste, 409)"
+      responses:
+        "200": { description: OK }
+        "412": { description: campaign_locked }
+    delete:
+      summary: "Annuler — uniquement avant le lancement (412 campaign_locked ensuite) ; campaigns.send"
+      responses:
+        "200": { description: Annulée }
+        "412": { description: campaign_locked }
+  /organizations/{organizationId}/campaigns/{campaignId}/preview:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: campaignId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Rendu HTML + texte avec des valeurs d'exemple
+      responses:
+        "200": { description: "{ subject, text, html }" }
+  /organizations/{organizationId}/campaigns/{campaignId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: campaignId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [test, check, schedule, unschedule] } }
+    post:
+      summary: "test (e-mail à l'utilisateur connecté) · check { includeCustomerException? } → AudienceCheck · schedule (campaigns.send) · unschedule (campaigns.send)"
+      description: |
+        `schedule` : 422 si objet / corps / expéditeur / segment manquent ou si l'exception client est invoquée sans
+        justification ; 412 `no_recipients` si personne n'est éligible ; 409 `stale_version`. L'instantané d'audience
+        est enregistré ; l'éligibilité est revérifiée par le worker à l'envoi.
+      requestBody:
+        {
+          required: false,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      oneOf:
+                        [
+                          { $ref: "#/components/schemas/ScheduleInput" },
+                          { type: object, properties: { includeCustomerException: { type: boolean } } },
+                        ],
+                    },
+                },
+            },
+        }
+      responses:
+        "200": { description: OK }
+        "412": { description: "no_recipients · campaign_locked · provider_failed (test)" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/campaigns/{campaignId}/recipients:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: campaignId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: status,
+          in: query,
+          schema: { type: string, enum: [all, pending, sent, failed, skipped, bounced, unsubscribed], default: all },
+        }
+      - { name: page, in: query, schema: { type: integer, default: 1 } }
+      - { name: pageSize, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+    get:
+      summary: Destinataires avec statut, motif d'exclusion, tentatives, clics
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          {
+                            recipients: { type: array, items: { $ref: "#/components/schemas/CampaignRecipient" } },
+                            total: { type: integer },
+                          },
+                      },
+                  },
+              },
+          }
+  /email/webhooks/{provider}:
+    parameters:
+      - {
+          name: provider,
+          in: path,
+          required: true,
+          schema: { type: string },
+          description: "doit être le fournisseur configuré (file en test, resend en production)",
+        }
+    post:
+      summary: Rappel de livraison du fournisseur e-mail (signé, idempotent)
+      description: |
+        Serveur → serveur : signature sur le corps BRUT (`X-Kroov-Signature: v1=<hmac>` pour le fournisseur
+        simulé ; `svix-id` / `svix-timestamp` / `svix-signature` pour Resend). `delivered` marque la livraison ;
+        `bounced` (dur) et `complained` excluent l'adresse et marquent le destinataire ; rejeu = `duplicate`.
+      security: []
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DeliveryCallback" } } } }
+      responses:
+        "200": { description: "{ received, outcomes: [applied | duplicate | unknown] }" }
+        "400": { description: Signature invalide }
+        "404": { description: Fournisseur inconnu }
+  /public/unsubscribe/{ref}:
+    parameters:
+      - {
+          name: ref,
+          in: path,
+          required: true,
+          schema: { type: string },
+          description: "<recipientId>.<jeton HMAC dérivé>",
+        }
+    post:
+      summary: Désinscription en un clic (cible List-Unsubscribe, RFC 8058) — sans connexion, idempotente
+      security: []
+      responses:
+        "200": { description: "{ unsubscribed: true }" }
+        "404": { description: Référence inconnue ou forgée }
+    get:
+      summary: Redirection vers la page humaine /desinscription/{ref}
+      security: []
+      responses:
+        "302": { description: Redirection }
   /payments/webhooks/{provider}:
     parameters:
       - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, fake] } }

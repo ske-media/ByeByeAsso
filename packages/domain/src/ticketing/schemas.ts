@@ -99,6 +99,8 @@ export const createPublicOrderSchema = z.object({
     .max(10),
   /** Optional e-mail at reservation time (collected at step 2 otherwise). */
   email: emailSchema.optional(),
+  /** Campaign attribution parameter (`kc`) carried from a tracked link; ignored when invalid. */
+  attribution: z.string().trim().max(200).optional(),
 });
 export type CreatePublicOrderInput = z.input<typeof createPublicOrderSchema>;
 

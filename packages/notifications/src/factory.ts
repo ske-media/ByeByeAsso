@@ -1,6 +1,7 @@
 import { ConsoleEmailAdapter } from "./console";
 import { FileEmailAdapter } from "./file";
 import type { EmailPort } from "./index";
+import { ResendEmailAdapter } from "./resend";
 import { SmtpEmailAdapter } from "./smtp";
 
 export interface EmailPortConfig {
@@ -36,7 +37,7 @@ export function createEmailPort(config: EmailPortConfig): EmailPort {
       if (!config.smtpUrl) throw new Error("SMTP_URL est requis avec EMAIL_PROVIDER=smtp.");
       return new SmtpEmailAdapter(config.smtpUrl, config.from);
     case "resend":
-      // Adapter delivered with Phase 8 (campaign volumes). Explicit limitation, not a silent fallback.
-      throw new Error("L'adaptateur Resend n'est pas encore disponible (phase 8). Utilisez EMAIL_PROVIDER=smtp.");
+      if (!config.resendApiKey) throw new Error("RESEND_API_KEY est requis avec EMAIL_PROVIDER=resend.");
+      return new ResendEmailAdapter(config.resendApiKey, config.from);
   }
 }

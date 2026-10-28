@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { fmtMinor } from "@/lib/money";
 import { ticketingContext } from "@/lib/ticketing";
 
+import { AttributionKeeper } from "./attribution";
 export async function generateMetadata({
   params,
 }: {
@@ -66,6 +67,7 @@ export default async function PublicEventPage({ params }: { params: Promise<{ or
       back={{ href: `/${event.organization.slug}`, label: `Retour aux événements de ${event.organization.name}` }}
     >
       <article className="py-6">
+        <AttributionKeeper />
         <EventPoster
           organizationName={event.organization.name}
           title={event.title}

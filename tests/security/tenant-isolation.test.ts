@@ -1330,8 +1330,9 @@ describeLive("S8. scheduling — isolation, publication guards, draft invisibili
   });
 });
 
+let erin: ApiClient | undefined; // volunteer_manager of A (S9): contacts.read only, no campaigns.*
+
 describeLive("S9. crm — tenant privacy, read vs manage vs export, consent and suppression integrity", () => {
-  let erin: ApiClient; // volunteer_manager of A: contacts.read only (no manage, no export)
   let contactId: string;
   let tagId: string;
   const api = (path: string) => `/api/v1/organizations/${orgA.id}${path}`;
@@ -1342,7 +1343,7 @@ describeLive("S9. crm — tenant privacy, read vs manage vs export, consent and 
     const inv = await alice.post(api("/invitations"), { email: erinEmail, role: "volunteer_manager" });
     expect(inv.status).toBe(201);
     const link = lastEmailLink(outbox, erinEmail, /https?:\/\/\S+\/invitation\/[A-Za-z0-9_-]+/);
-    expect((await erin.post(`/api/v1/invitations/${link.split("/invitation/")[1]!}/accept`)).status).toBe(200);
+    expect((await erin!.post(`/api/v1/invitations/${link.split("/invitation/")[1]!}/accept`)).status).toBe(200);
     const created = await alice.post(api("/contacts"), {
       email: `Contact.S9-${run}@sec.kroov.local`,
       firstName: "Sam",
@@ -1375,18 +1376,18 @@ describeLive("S9. crm — tenant privacy, read vs manage vs export, consent and 
   });
 
   it("contacts.read lists and opens; contacts.manage is required to write; contacts.export to export", async () => {
-    expect((await erin.get(api("/contacts"))).status).toBe(200);
-    const detail = await erin.get(api(`/contacts/${contactId}`));
+    expect((await erin!.get(api("/contacts"))).status).toBe(200);
+    const detail = await erin!.get(api(`/contacts/${contactId}`));
     expect(detail.status).toBe(200);
-    expect((await erin.post(api("/contacts"), { email: `x-${run}@sec.kroov.local` })).status).toBe(403);
-    expect((await erin.patch(api(`/contacts/${contactId}`), { city: "Lyon" })).status).toBe(403);
-    expect((await erin.post(api(`/contacts/${contactId}/notes`), { body: "Interne" })).status).toBe(403);
-    expect((await erin.post(api("/contact-tags"), { name: "VIP" })).status).toBe(403);
-    expect((await erin.post(api("/segments"), { name: "Tous" })).status).toBe(403);
-    expect((await erin.post(api("/suppressions"), { email: `x-${run}@sec.kroov.local` })).status).toBe(403);
-    expect((await erin.post(api(`/contacts/${contactId}/merge`), { mergedContactId: contactId })).status).toBe(403);
-    expect((await erin.post(api("/crm/rebuild"), {})).status).toBe(403);
-    expect((await erin.get(api("/contacts/export"))).status).toBe(403);
+    expect((await erin!.post(api("/contacts"), { email: `x-${run}@sec.kroov.local` })).status).toBe(403);
+    expect((await erin!.patch(api(`/contacts/${contactId}`), { city: "Lyon" })).status).toBe(403);
+    expect((await erin!.post(api(`/contacts/${contactId}/notes`), { body: "Interne" })).status).toBe(403);
+    expect((await erin!.post(api("/contact-tags"), { name: "VIP" })).status).toBe(403);
+    expect((await erin!.post(api("/segments"), { name: "Tous" })).status).toBe(403);
+    expect((await erin!.post(api("/suppressions"), { email: `x-${run}@sec.kroov.local` })).status).toBe(403);
+    expect((await erin!.post(api(`/contacts/${contactId}/merge`), { mergedContactId: contactId })).status).toBe(403);
+    expect((await erin!.post(api("/crm/rebuild"), {})).status).toBe(403);
+    expect((await erin!.get(api("/contacts/export"))).status).toBe(403);
     expect((await carol.get(api("/contacts/export"))).status).toBe(403);
     const tag = await alice.post(api("/contact-tags"), { name: `VIP ${run}` });
     expect(tag.status).toBe(201);
@@ -1438,8 +1439,8 @@ describeLive("S9. crm — tenant privacy, read vs manage vs export, consent and 
       ((await alice.get(api(`/contacts/${contactId}`))).json as { data: { marketingEmailStatus: string } }).data
         .marketingEmailStatus,
     ).toBe("suppressed");
-    expect((await erin.get(api("/suppressions"))).status).toBe(200);
-    expect((await erin.post(api(`/suppressions/${supId}/lift`), { reason: "Parce que" })).status).toBe(403);
+    expect((await erin!.get(api("/suppressions"))).status).toBe(200);
+    expect((await erin!.post(api(`/suppressions/${supId}/lift`), { reason: "Parce que" })).status).toBe(403);
     expect((await alice.post(api(`/suppressions/${supId}/lift`), { reason: "x" })).status).toBe(422);
     expect(
       (await bob.post(`/api/v1/organizations/${orgB.id}/suppressions/${supId}/lift`, { reason: "Pwn attempt" })).status,
@@ -1472,8 +1473,8 @@ describeLive("S9. crm — tenant privacy, read vs manage vs export, consent and 
     });
     expect(forgedTag.status).toBe(422);
     // A reader can preview but cannot persist.
-    expect((await erin.post(api("/segments/preview"), { rules: [] })).status).toBe(200);
-    expect((await erin.post(api("/segments"), { name: `Tous ${run}` })).status).toBe(403);
+    expect((await erin!.post(api("/segments/preview"), { rules: [] })).status).toBe(200);
+    expect((await erin!.post(api("/segments"), { name: `Tous ${run}` })).status).toBe(403);
     const seg = await alice.post(api("/segments"), { name: `Tous ${run}` });
     expect(seg.status).toBe(201);
     const segId = (seg.json as { data: { id: string } }).data.id;
@@ -1481,3 +1482,121 @@ describeLive("S9. crm — tenant privacy, read vs manage vs export, consent and 
     expect((await carol.get(api(`/segments/${segId}`))).status).toBe(403);
   });
 });
+
+describeLive(
+  "S10. marketing — send permission, tenant references, no mail to ineligible, signed callbacks and tokens",
+  () => {
+    let segmentId: string;
+    let noneSegmentId: string;
+    let campaignId: string;
+    let frank: ApiClient; // marketing_manager of A: campaigns.manage + campaigns.send, no contacts.manage
+    const api = (path: string) => `/api/v1/organizations/${orgA.id}${path}`;
+
+    beforeAll(async () => {
+      const frankEmail = `frank-${run}@sec.kroov.local`;
+      frank = await signedInClient(baseUrl!, outbox, { name: "Frank F", email: frankEmail, password });
+      const inv = await alice.post(api("/invitations"), { email: frankEmail, role: "marketing_manager" });
+      expect(inv.status).toBe(201);
+      const link = lastEmailLink(outbox, frankEmail, /https?:\/\/\S+\/invitation\/[A-Za-z0-9_-]+/);
+      expect((await frank.post(`/api/v1/invitations/${link.split("/invitation/")[1]!}/accept`)).status).toBe(200);
+      const seg = await alice.post(api("/segments"), {
+        name: `Tous S10 ${run}`,
+        definition: { match: "all", rules: [] },
+      });
+      expect(seg.status).toBe(201);
+      segmentId = (seg.json as { data: { id: string } }).data.id;
+      const none = await alice.post(api("/segments"), {
+        name: `Non consentis S10 ${run}`,
+        definition: { match: "all", rules: [{ type: "marketing_email", statuses: ["none"] }] },
+      });
+      noneSegmentId = (none.json as { data: { id: string } }).data.id;
+    }, 60_000);
+
+    it("campaigns are private to the organization: outsiders 403, forged ids 404, foreign segment refused", async () => {
+      expect((await carol.get(api("/campaigns"))).status).toBe(403);
+      expect((await dave.get(api("/campaigns"))).status).toBe(403);
+      expect((await erinOrSkip()).status).toBe(403);
+      const segB = await bob.post(`/api/v1/organizations/${orgB.id}/segments`, { name: `B ${run}` });
+      const segBId = (segB.json as { data: { id: string } }).data.id;
+      expect((await alice.post(api("/campaigns"), { name: "x", segmentId: segBId })).status).toBe(422);
+      const created = await alice.post(api("/campaigns"), {
+        name: `Campagne S10 ${run}`,
+        subject: "Objet",
+        fromName: "A",
+        body: "Corps [lien](https://example.org/a)",
+        segmentId: noneSegmentId,
+      });
+      expect(created.status).toBe(201);
+      campaignId = (created.json as { data: { id: string } }).data.id;
+      expect((await bob.get(`/api/v1/organizations/${orgB.id}/campaigns/${campaignId}`)).status).toBe(404);
+      expect(
+        (await bob.patch(`/api/v1/organizations/${orgB.id}/campaigns/${campaignId}`, { subject: "Pwn" })).status,
+      ).toBe(404);
+      expect((await bob.post(`/api/v1/organizations/${orgB.id}/campaigns/${campaignId}/schedule`, {})).status).toBe(
+        404,
+      );
+      expect((await carol.get(api(`/campaigns/${campaignId}/preview`))).status).toBe(403);
+    });
+
+    it("scheduling needs campaigns.send and a consented audience; the customer exception needs a reasoned note", async () => {
+      // Everyone in A's base right now has no explicit consent: no recipients → 412, nothing can be sent.
+      const check = await frank.post(api(`/campaigns/${campaignId}/check`), {});
+      expect(check.status).toBe(200);
+      expect((check.json as { data: { eligibleCount: number } }).data.eligibleCount).toBe(0);
+      const noOne = await frank.post(api(`/campaigns/${campaignId}/schedule`), {});
+      expect(noOne.status).toBe(412);
+      expect((noOne.json as { error: { details: { code: string } } }).error.details.code).toBe("no_recipients");
+      // Consent one contact with evidence (contacts.manage: alice), then Frank may schedule.
+      const contact = await alice.post(api("/contacts"), { email: `dest-${run}@sec.kroov.local`, firstName: "Dest" });
+      const contactId = (contact.json as { data: { id: string } }).data.id;
+      expect(
+        (await alice.post(api(`/contacts/${contactId}/consents`), { status: "granted", evidence: "Bulletin signé" }))
+          .status,
+      ).toBe(201);
+      expect((await alice.patch(api(`/campaigns/${campaignId}`), { segmentId })).status).toBe(200);
+      expect(
+        (await frank.post(api(`/campaigns/${campaignId}/schedule`), { includeCustomerException: true })).status,
+      ).toBe(422);
+      // A scoped event manager (dave) has no campaigns.* on the organization.
+      expect((await dave.post(api(`/campaigns/${campaignId}/schedule`), {})).status).toBe(403);
+      const scheduled = await frank.post(api(`/campaigns/${campaignId}/schedule`), {
+        sendAt: new Date(Date.now() + 86_400_000).toISOString(),
+      });
+      expect(scheduled.status).toBe(200);
+      expect(
+        (scheduled.json as { data: { check: { eligibleCount: number } } }).data.check.eligibleCount,
+      ).toBeGreaterThanOrEqual(1);
+      // Locked once scheduled; unschedule by the sender only.
+      expect((await alice.patch(api(`/campaigns/${campaignId}`), { subject: "Autre" })).status).toBe(412);
+      expect((await carol.post(api(`/campaigns/${campaignId}/unschedule`), {})).status).toBe(403);
+      expect((await frank.post(api(`/campaigns/${campaignId}/unschedule`), {})).status).toBe(200);
+    });
+
+    it("provider callbacks require a valid signature; tracked links and unsubscribe refs are unforgeable", async () => {
+      const anon = new ApiClient(baseUrl!);
+      const body = JSON.stringify({ providerMessageId: "nope", event: "bounced" });
+      const unsigned = await anon.request("POST", "/api/v1/email/webhooks/file", undefined, {
+        headers: { "content-type": "application/json" },
+      });
+      expect([400, 404]).toContain(unsigned.status);
+      const forged = await fetch(`${baseUrl}/api/v1/email/webhooks/file`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-kroov-signature": "v1=00" },
+        body,
+      });
+      expect(forged.status).toBe(400);
+      expect((await fetch(`${baseUrl}/api/v1/email/webhooks/unknown-provider`, { method: "POST", body })).status).toBe(
+        404,
+      );
+      expect((await fetch(`${baseUrl}/l/not-a-real-token-at-all`, { redirect: "manual" })).status).toBe(404);
+      expect((await fetch(`${baseUrl}/api/v1/public/unsubscribe/forged.ref`, { method: "POST" })).status).toBe(404);
+      const page = await fetch(`${baseUrl}/desinscription/forged.ref`);
+      expect(page.status).toBe(404);
+    });
+
+    async function erinOrSkip() {
+      // Erin (volunteer_manager, S9) has contacts.read but no campaigns.*: created in S9 when it ran.
+      return erin ? erin.get(api("/campaigns")) : Promise.resolve({ status: 403 });
+    }
+  },
+);

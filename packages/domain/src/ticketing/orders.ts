@@ -5,6 +5,7 @@ import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
 import { recordTouchpoint } from "../crm";
 import { type Actor, ForbiddenError, NotFoundError, newId, PreconditionFailedError } from "../kernel";
+import { resolveAttribution } from "../marketing";
 import { hasActiveMembership } from "../memberships/memberships";
 import { emitDomainEvent } from "../outbox";
 import {
@@ -456,6 +457,9 @@ export async function createPublicOrder(
     const id = newId();
     const number = await nextOrderNumber(tx, org.id);
     const expiresAt = new Date(now.getTime() + holdMinutes * 60_000);
+    // Campaign attribution (phase 8): link-level evidence only, and only for this organization's campaigns.
+    const attribution = await resolveAttribution(tx, ctx, v.attribution);
+    const attributed = attribution && attribution.organizationId === org.id ? attribution : null;
     await tx.insert(schema.orders).values({
       id,
       organizationId: org.id,
@@ -469,6 +473,9 @@ export async function createPublicOrder(
       accessTokenHash: hashToken(deriveToken(ctx.credentialSecret, TOKEN_SCOPES.orderAccess, id, 1)),
       secretVersion: 1,
       expiresAt,
+      campaignId: attributed?.campaignId ?? null,
+      trackingLinkId: attributed?.trackingLinkId ?? null,
+      campaignRecipientId: attributed?.campaignRecipientId ?? null,
     });
     await tx.insert(schema.orderItems).values(
       lines.map((l) => ({

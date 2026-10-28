@@ -54,6 +54,10 @@ export const serverEnvSchema = z.object({
   EMAIL_FROM: z.string().email().default("no-reply@kroov.local"),
   SMTP_URL: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
+  /** HMAC secret for provider delivery callbacks (fake provider in tests, Resend/svix signing secret in production). */
+  EMAIL_WEBHOOK_SECRET: z.string().min(16).default("fake-email-webhook-secret-local-only"),
+  /** Campaign dispatch: recipients per batch (one short transaction per batch). */
+  CAMPAIGN_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(50),
 
   // S3-compatible object storage.
   S3_ENDPOINT: url.optional(),

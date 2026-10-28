@@ -6,6 +6,7 @@ OUTBOX="${EMAIL_FILE_PATH:-$ROOT/.tmp/outbox.jsonl}"
 case "${1:-}" in
   stop)
     pkill -f "next-server \(v" || true
+    pkill -f "tsx src/main.ts" || true
     sleep 1
     ;;
   start)
@@ -13,6 +14,9 @@ case "${1:-}" in
     mkdir -p "$(dirname "$OUTBOX")"; : > "$OUTBOX"
     cd "$ROOT/apps/web"
     APP_ENV=test EMAIL_PROVIDER=file EMAIL_FILE_PATH="$OUTBOX" setsid nohup npx next start --port 3000 > "$ROOT/.tmp/web-start.log" 2>&1 &
+    # Worker (phase 8: campaign dispatch every minute) with the same mailbox.
+    cd "$ROOT/apps/worker"
+    APP_ENV=test EMAIL_PROVIDER=file EMAIL_FILE_PATH="$OUTBOX" setsid nohup npx tsx src/main.ts > "$ROOT/.tmp/worker-start.log" 2>&1 &
     for _ in $(seq 1 30); do
       if curl -fs -o /dev/null http://localhost:3000/connexion; then echo "server up"; exit 0; fi
       sleep 1

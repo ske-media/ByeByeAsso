@@ -87,6 +87,19 @@ erDiagram
   organizations ||--o{ segments : defines
   segments ||--o{ segment_members : "materialised"
   contacts ||--o{ segment_members : "member of"
+  organizations ||--o{ email_templates : defines
+  organizations ||--o{ campaigns : runs
+  segments |o--o{ campaigns : "audience"
+  email_templates |o--o{ campaigns : "started from"
+  campaigns ||--o{ campaign_audiences : "snapshots"
+  campaigns ||--o{ campaign_recipients : "addresses"
+  contacts ||--o{ campaign_recipients : "receives"
+  campaigns ||--o{ message_deliveries : "delivered as"
+  campaign_recipients ||--o{ message_deliveries : "delivery"
+  campaigns ||--o{ tracking_links : "tracks"
+  tracking_links ||--o{ tracking_events : "clicked"
+  campaign_recipients |o--o{ tracking_events : "by"
+  campaigns |o--o{ orders : "attributed (link-level)"
   payments ||--o{ payment_attempts : "attempted"
   orders ||--o{ refunds : "refunded by"
   payments ||--o{ refunds : "reverses"
@@ -859,6 +872,106 @@ erDiagram
     uuid contact_id FK
     uuid added_by FK
   }
+  email_templates {
+    uuid id PK
+    uuid organization_id FK
+    text name
+    text slug
+    text subject
+    text preheader
+    text body
+    timestamptz archived_at
+  }
+  campaigns {
+    uuid id PK
+    uuid organization_id FK
+    text name
+    text slug
+    campaign_status status
+    text subject
+    text preheader
+    text from_name
+    text reply_to
+    text body
+    uuid template_id FK
+    uuid segment_id FK
+    boolean include_customer_exception
+    text legal_note
+    timestamptz scheduled_at
+    timestamptz started_at
+    timestamptz finished_at
+    int audience_count
+    int eligible_count
+    int sent_count
+    int failed_count
+    int skipped_count
+    text error
+    int version
+  }
+  campaign_audiences {
+    uuid id PK
+    uuid organization_id FK
+    uuid campaign_id FK
+    uuid segment_id
+    jsonb definition
+    text stage
+    timestamptz computed_at
+    int segment_count
+    int not_consented_count
+    int suppressed_count
+    int invalid_count
+    int duplicate_count
+    int eligible_count
+  }
+  campaign_recipients {
+    uuid id PK
+    uuid organization_id FK
+    uuid campaign_id FK
+    uuid contact_id FK
+    text email
+    campaign_recipient_status status
+    text skip_reason
+    int attempts
+    text last_error
+    timestamptz sent_at
+    uuid delivery_id
+    int clicks_count
+  }
+  message_deliveries {
+    uuid id PK
+    uuid organization_id
+    delivery_kind kind
+    uuid campaign_id
+    uuid recipient_id
+    text to_email
+    text subject
+    text provider
+    text provider_message_id
+    delivery_status status
+    text error
+    timestamptz accepted_at
+    timestamptz delivered_at
+    timestamptz bounced_at
+  }
+  tracking_links {
+    uuid id PK
+    uuid organization_id FK
+    uuid campaign_id FK
+    text token
+    text target_url
+    int clicks_count
+    int unique_clicks_count
+  }
+  tracking_events {
+    uuid id PK
+    uuid organization_id FK
+    uuid campaign_id FK
+    uuid link_id FK
+    uuid recipient_id FK
+    tracking_event_kind kind
+    text user_agent
+    timestamptz occurred_at
+  }
   outbox_events {
     uuid id PK
     text aggregate_type
@@ -936,6 +1049,12 @@ erDiagram
 | `contact_suppressions`                                | `UNIQUE (organization_id, email) WHERE lifted_at IS NULL`, `CHECK email = lower(email)`, `CHECK lifted ⇒ lift_reason ≥ 3`                                                                                                                                                                  | une exclusion active par adresse ; **une levée est toujours motivée**                                                                       |
 | `contact_merge_records`                               | `CHECK surviving <> merged`, FK composites ; append-only                                                                                                                                                                                                                                   | trace et instantané de chaque fusion                                                                                                        |
 | `segments` / `segment_members`                        | `UNIQUE (organization_id, slug)`, `UNIQUE (segment_id, contact_id)`, FK composites segment / contact                                                                                                                                                                                       | segments par organisation ; membres jamais d'un autre tenant                                                                                |
+| `campaigns`                                           | `UNIQUE (organization_id, slug)`, `UNIQUE (organization_id, id)`, FK composites segment / gabarit (`SET NULL`), `CHECK scheduled ⇒ scheduled_at`, `CHECK sending/sent/… ⇒ started_at`, `CHECK compteurs ≥ 0`                                                                               | campagnes par organisation ; états cohérents avec leurs horodatages                                                                         |
+| `campaign_recipients`                                 | **`UNIQUE (campaign_id, email)`**, FK composites campagne / contact, `CHECK email = lower(email)`, `CHECK attempts ≥ 0`                                                                                                                                                                    | **un message au plus par adresse et par campagne** (déduplication) ; reprise sans doublon                                                   |
+| `campaign_audiences`                                  | FK composite campagne, `CHECK stage IN (check, schedule, dispatch)` ; append-only                                                                                                                                                                                                          | instantanés d'audience traçables (vérification, programmation, envoi)                                                                       |
+| `message_deliveries`                                  | `UNIQUE (provider, provider_message_id) WHERE NOT NULL`                                                                                                                                                                                                                                    | rappels fournisseur idempotents                                                                                                             |
+| `tracking_links` / `tracking_events`                  | `UNIQUE (token)`, `UNIQUE (campaign_id, target_url)`, `CHECK token 16–64`, `CHECK target_url ~ '^https?://'`, FK composites ; `CHECK user_agent ≤ 200`, **aucune colonne d'adresse IP**                                                                                                    | redirection seulement vers la cible enregistrée ; suivi sans IP                                                                             |
+| `orders` (+ phase 8)                                  | FK composites nullables `campaign_id`, `tracking_link_id`, `campaign_recipient_id` (`SET NULL`), index `(campaign_id, status)`                                                                                                                                                             | attribution au niveau du lien, jamais par résolution d'identité ; une campagne supprimée n'efface pas la commande                           |
 | infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                                                                   | idempotence, relais, surcharge par organisation                                                                                             |
 
 Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).
@@ -947,3 +1066,5 @@ Le dernier propriétaire est protégé par règle métier (transaction avec `SEL
 La machine à états des versions de planning (`draft → generating → proposed | generation_failed`, `proposed → under_review → published → superseded`, `draft → published` possible après édition manuelle) vit dans `packages/domain/src/scheduling/state-machine.ts`. Les contraintes dures du moteur (disponibilité, compétences obligatoires, âge, chevauchement, repos minimal, heures max par jour, effectif max) ne sont pas exprimées en SQL : elles sont revérifiées **en transaction, sur les données actuelles**, à chaque affectation manuelle et à la publication (verrou `FOR UPDATE` sur l'événement, `version` pour la concurrence optimiste).
 
 Le statut marketing d'un contact (`marketing_email_status`) est une dénormalisation **dérivée** du journal `consent_records` et des exclusions, recalculée par le domaine (`refreshContact`) après chaque point de contact, consentement manuel, exclusion, levée ou fusion : exclusion > dernier enregistrement explicite (`opted_in` / `withdrawn`) > exception client (`customer_only`) > `none`. Une commande ou une adhésion sans case cochée produit un enregistrement `customer_exception` (base légale de l'exception « client existant », art. L.34-5 CPCE) qui ne vaut jamais `opted_in` et ne re-consent jamais après un retrait.
+
+La machine à états des campagnes (`draft → scheduled | cancelled`, `scheduled → draft | cancelled | sending`, `sending → sent | partially_failed | failed`, terminaux sans retour) vit dans `packages/domain/src/marketing/state-machine.ts` ; le passage en `sending` est réservé au worker sous `SELECT … FOR UPDATE SKIP LOCKED`. L'éligibilité d'un destinataire (consentement explicite — ou exception client si décidée —, absence d'exclusion active, adresse valide, pas de doublon) n'est jamais lue depuis l'instantané : elle est recalculée à l'envoi depuis `contacts` et `contact_suppressions`.

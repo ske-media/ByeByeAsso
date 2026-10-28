@@ -28,5 +28,6 @@ export interface EmailPort {
 export { ConsoleEmailAdapter } from "./console";
 export { createEmailPort, type EmailPortConfig } from "./factory";
 export { FileEmailAdapter } from "./file";
+export { ResendEmailAdapter } from "./resend";
 export { SmtpEmailAdapter } from "./smtp";
 export * from "./templates/layout";

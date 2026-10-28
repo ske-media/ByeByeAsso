@@ -1,8 +1,11 @@
 /**
- * marketing module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * marketing module — public API (phase 8: campaigns, templates, dispatch, tracking, unsubscribe, attribution).
+ * Other modules must import ONLY from this file. Ticketing uses `resolveAttribution` at reservation time.
  */
 export const MODULE_NAME = "marketing" as const;
+
+export * from "./campaigns";
+export * from "./render";
+export * from "./schemas";
+export * from "./state-machine";
+export * from "./webhooks";
