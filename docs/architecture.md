@@ -112,6 +112,7 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Phase 0 (INFRASTRUCTURE) : `idempotency_records`, `outbox_events`, `job_executions`, `feature_flags`.
 - Phase 1 (AUTH + IDENTITY) : tables Better Auth, `user_profiles`, `organizations`, `organization_settings`, `organization_members`, `roles`, `permissions`, `role_permissions`, `member_role_assignments` (FK composite tenant-safe), `organization_invitations`, `audit_logs` ; FK `organization_id` sur les tables infra.
 - Phase 2 (EVENTS) : `event_locations`, `events` (slug unique par organisation, instants `timestamptz` + `timezone`, `version`, statut/visibilité en enums, FK composite vers le lieu), `event_settings`, `stored_files`, `event_media`, `form_definitions`, `form_fields`, `form_submissions`, `form_answers` ; FK composites `(organization_id, event_id)` posées sur `member_role_assignments` et `organization_invitations`.
+- Phase 3 (TICKETING + PAYMENTS) : `ticket_types`, `ticket_inventory_pools`, `ticket_pool_links`, `inventory_holds`, `inventory_hold_items`, `orders`, `order_items`, `tickets`, `checkins`, `promo_codes`, `promo_redemptions`, `payment_accounts`, `payments`, `payment_attempts`, `payment_webhook_events`, `refunds`, `refund_items`, `ledger_accounts`, `ledger_transactions`, `ledger_entries`, `financial_documents` ; `events` gagne `ticketing_status`, `max_tickets_per_order`, `sales_close_at`, `nominative_tickets`.
 - Diagramme ER : `docs/er-diagram.md` (mis à jour à chaque phase).
 
 ## 7. Processus worker
@@ -119,6 +120,7 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - pg-boss démarre dans le schéma `pgboss` de la même base ; files déclarées dans `apps/worker/src/queue.ts` (`QUEUES`), politique commune : 5 tentatives, backoff exponentiel, conservation 7 jours.
 - Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, marquage `dispatched`, backoff par ligne, échec définitif après 10 tentatives. Balayage de sûreté chaque minute ; les producteurs déclencheront le relais directement après commit (phase 1).
 - Maintenance : purge horaire des `idempotency_records` expirés, heartbeat chaque minute.
+- Billetterie (phase 3) : `orders.expire-holds` chaque minute (réservations échues → `expired`, places libérées, billets `pending` → `revoked`) ; `payments.reconcile` toutes les 10 min (paiements `pending` depuis > 15 min réinterrogés chez le prestataire et traités comme leur webhook).
 - Événements (phase 2) : `events.complete-ended` chaque heure — les événements publiés terminés depuis plus de 24 h passent `completed` (acteur `system`, audit + outbox `event.completed`).
 - Arrêt propre sur SIGINT/SIGTERM (`stop({ graceful: true })`, fermeture du pool).
 
@@ -135,6 +137,15 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Outbox : `event.published`, `event.cancelled`, `event.completed`, `event.logistics_changed` (dates ou lieu d'un événement publié) — consommés par les notifications des phases suivantes.
 - Coque organisateur : `loadOrgPage` accepte tout membre actif (y compris ceux dont les droits sont limités à des événements) ; chaque section vérifie ensuite sa propre permission. `GET /organizations/{id}` reste réservé à `organization.read`.
 - Pages publiques `/[orgSlug]` et `/[orgSlug]/[eventSlug]` : rendu serveur, `robots` selon la visibilité, 404 pour brouillons / suspendus / archivés / privés ; le CTA billetterie est annoncé mais inactif (aucun faux bouton).
+
+## 7quater. Billetterie et paiements (phase 3)
+
+- Domaine `packages/domain/src/ticketing` : `schemas.ts`, `state-machines.ts` (commande, paiement, billet), `pricing.ts` (frais acheteur = commission plateforme sur les billets payants, remises sur le sous-total, répartition de remise par billet au plus fort reste), `ticket-types.ts` (tarifs, pools, codes promo, réglages, disponibilité), `orders.ts` (réservation sous verrous, coordonnées, promo, checkout, `markOrderPaid`, expiration, lectures organisateur et acheteur, renvoi avec rotation des jetons), `payments.ts` (comptes connectés, `processProviderEvent`, réconciliation), `refunds.ts`, `checkins.ts` (scan atomique, page billet), `ledger.ts`, `emails.ts`, `context.ts` (dérivation HMAC des jetons).
+- Port prestataire dans `packages/domain/src/payments/port.ts` ; adaptateurs dans `@kroov/payments` : `stripe` (Connect Express, Checkout Session sur le compte connecté avec `application_fee_amount`, `constructEvent`, remboursements `reverse_transfer` + `refund_application_fee` — vérification externe en attente, pas de clés ni de réseau) et `fake` (page de paiement simulée dans l'application + webhook HMAC signé, refusé en staging/production par la fabrique).
+- Secrets dérivés, jamais stockés : jeton d'accès commande, jeton de page billet et identifiant QR = `HMAC(AUTH_SECRET, scope:id:version)` ; la base ne garde que les SHA-256. Bumper `secret_version` révoque tous les liens (renvoi des billets).
+- Webhooks : insertion `payment_webhook_events` (UNIQUE) = porte d'idempotence ; traitement sous `FOR UPDATE` de la commande ; `succeeded` après `failed` prévaut, `failed` après `succeeded` ignoré ; `succeeded` sur une commande déjà payée par un autre paiement → remboursement automatique du doublon ; `succeeded` sur une commande expirée → re-vérification de l'inventaire puis émission, sinon remboursement automatique et e-mail.
+- Contrôle d'accès : page dédiée `/controle/[slug]/[eventSlug]` (coque `CheckInShell`, caméra via `BarcodeDetector` + saisie manuelle), API `checkins` ; admission par `UPDATE … WHERE status = 'valid'` + index unique partiel.
+- Ledger en partie double par organisation (`receivable_provider`, `revenue_tickets`, `platform_fees`), alimenté à chaque paiement et remboursement ; lecture en phase 7.
 
 ## 8. Sécurité (fondation)
 

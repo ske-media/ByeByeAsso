@@ -26,6 +26,8 @@ export default async function OrganizationLayout({
       organizations={ctx.myOrganizations.map((o) => ({ id: o.id, name: o.name, slug: o.slug }))}
       sections={{
         events: ctx.can("events.read") || ctx.member.eventPermissions.size > 0,
+        ticketing:
+          ctx.can("orders.read") || [...ctx.member.eventPermissions.values()].some((p) => p.has("orders.read")),
         team: ctx.can("organization.read"),
         settings: ctx.can("organization.manage"),
       }}

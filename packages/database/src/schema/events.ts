@@ -70,6 +70,8 @@ export const eventStatus = pgEnum("event_status", [
   "archived",
 ]);
 export const eventVisibility = pgEnum("event_visibility", ["public", "unlisted", "private"]);
+/** not_configured: no sales yet · open: public ticket selection live · closed: sales closed by the organizer or by `sales_close_at`. */
+export const ticketingStatus = pgEnum("ticketing_status", ["not_configured", "open", "closed"]);
 
 /**
  * Lifecycle (typed state machine in @kroov/domain/events):
@@ -106,6 +108,13 @@ export const events = pgTable(
     createdBy: uuid("created_by")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
+    /* Ticketing settings (phase 3). */
+    ticketingStatus: ticketingStatus("ticketing_status").notNull().default("not_configured"),
+    maxTicketsPerOrder: integer("max_tickets_per_order").notNull().default(6),
+    /** Hard close of online sales (defaults to the event start when null). */
+    salesCloseAt: timestamp("sales_close_at", { withTimezone: true, mode: "date" }),
+    /** Each ticket carries an attendee name collected at checkout. */
+    nominativeTickets: boolean("nominative_tickets").notNull().default(true),
     ...timestamps(),
   },
   (t) => [
@@ -124,6 +133,7 @@ export const events = pgTable(
     check("events_capacity_nonneg", sql`${t.capacity} >= 0`),
     check("events_version_pos", sql`${t.version} >= 1`),
     check("events_cancel_reason", sql`${t.status} <> 'cancelled' or ${t.cancellationReason} is not null`),
+    check("events_max_per_order", sql`${t.maxTicketsPerOrder} between 1 and 50`),
   ],
 );
 

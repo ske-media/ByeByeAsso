@@ -237,7 +237,10 @@ export function CheckInShell({ LinkComponent, context, nav, children }: CheckInS
         aria-label="Navigation contrôle d'accès"
         className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)]"
       >
-        <ul className="mx-auto grid max-w-[640px] grid-cols-3">
+        <ul
+          className="mx-auto grid max-w-[640px]"
+          style={{ gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))` }}
+        >
           {nav.map((item) => (
             <li key={item.href}>
               <LinkComponent

@@ -1,6 +1,6 @@
 # Diagramme entité-relation
 
-Mis à jour à chaque phase. Phase 0 : INFRASTRUCTURE · Phase 1 : AUTH (Better Auth) + IDENTITY · Phase 2 : EVENTS (lieux, événements, réglages, fichiers/médias, formulaires dynamiques — ces trois derniers groupes sont posés en base et seront servis par les phases 3, 5 et 9).
+Mis à jour à chaque phase. Phase 0 : INFRASTRUCTURE · Phase 1 : AUTH (Better Auth) + IDENTITY · Phase 2 : EVENTS (lieux, événements, réglages, fichiers/médias, formulaires dynamiques — posés, servis par les phases 5 et 9) · Phase 3 : TICKETING (tarifs, pools, réservations, commandes, billets, contrôles, codes promo) + PAYMENTS (comptes connectés, paiements, webhooks, remboursements, ledger en partie double, documents financiers posés).
 
 ```mermaid
 erDiagram
@@ -19,6 +19,33 @@ erDiagram
   events ||--o{ event_media : has
   stored_files ||--o{ event_media : "is"
   organizations ||--o{ stored_files : owns
+  events ||--o{ ticket_types : "sells (same org)"
+  events ||--o{ ticket_inventory_pools : "shares (same org)"
+  ticket_inventory_pools ||--o{ ticket_pool_links : groups
+  ticket_types ||--o{ ticket_pool_links : "belongs to"
+  events ||--o{ orders : "ordered for (same org)"
+  orders ||--o{ order_items : has
+  ticket_types ||--o{ order_items : "priced as"
+  orders ||--o| inventory_holds : reserves
+  inventory_holds ||--o{ inventory_hold_items : has
+  orders ||--o{ tickets : issues
+  ticket_types ||--o{ tickets : "typed as"
+  tickets ||--o{ checkins : "scanned"
+  users ||--o{ checkins : "scanned by"
+  events ||--o{ promo_codes : "offers"
+  promo_codes ||--o{ promo_redemptions : "used by"
+  orders ||--o| promo_redemptions : "applies"
+  organizations ||--o{ payment_accounts : "connected at"
+  orders ||--o{ payments : "paid by"
+  payments ||--o{ payment_attempts : "attempted"
+  orders ||--o{ refunds : "refunded by"
+  payments ||--o{ refunds : "reverses"
+  refunds ||--o{ refund_items : "covers"
+  tickets ||--o{ refund_items : "refunded"
+  organizations ||--o{ ledger_accounts : "books"
+  ledger_transactions ||--o{ ledger_entries : "balances to zero"
+  ledger_accounts ||--o{ ledger_entries : "posted to"
+  orders ||--o{ ledger_transactions : "explains"
   events ||--o{ form_definitions : "has (same org)"
   form_definitions ||--o{ form_fields : has
   form_definitions ||--o{ form_submissions : receives
@@ -215,6 +242,188 @@ erDiagram
     uuid field_id FK
     jsonb value
   }
+  ticket_types {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    text name
+    integer price_minor
+    char currency
+    integer quota
+    timestamptz sales_start_at
+    timestamptz sales_end_at
+    integer min_per_order
+    integer max_per_order
+    boolean hidden
+    ticket_type_status status
+  }
+  ticket_inventory_pools {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    text name
+    integer capacity
+  }
+  ticket_pool_links {
+    uuid id PK
+    uuid pool_id FK
+    uuid ticket_type_id FK
+  }
+  orders {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    text number
+    order_status status
+    text buyer_email
+    uuid user_id FK
+    integer subtotal_minor
+    integer discount_minor
+    integer fees_minor
+    integer total_minor
+    uuid promo_code_id FK
+    text access_token_hash
+    integer secret_version
+    timestamptz expires_at
+    timestamptz paid_at
+    integer version
+  }
+  order_items {
+    uuid id PK
+    uuid order_id FK
+    uuid ticket_type_id FK
+    text label
+    integer quantity
+    integer unit_price_minor
+    integer unit_fee_minor
+  }
+  inventory_holds {
+    uuid id PK
+    uuid order_id FK
+    uuid event_id FK
+    inventory_hold_status status
+    timestamptz expires_at
+  }
+  inventory_hold_items {
+    uuid id PK
+    uuid hold_id FK
+    uuid ticket_type_id FK
+    integer quantity
+  }
+  tickets {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    uuid order_id FK
+    uuid ticket_type_id FK
+    text number
+    text attendee_name
+    ticket_status status
+    text qr_credential_hash
+    text view_token_hash
+    integer secret_version
+    timestamptz used_at
+  }
+  checkins {
+    uuid id PK
+    uuid event_id FK
+    uuid ticket_id FK
+    checkin_result result
+    uuid scanned_by FK
+    timestamptz scanned_at
+  }
+  promo_codes {
+    uuid id PK
+    uuid event_id FK
+    text code
+    promo_discount_kind kind
+    integer value
+    integer max_redemptions
+    boolean active
+  }
+  promo_redemptions {
+    uuid id PK
+    uuid promo_code_id FK
+    uuid order_id FK
+    integer discount_minor
+  }
+  payment_accounts {
+    uuid id PK
+    uuid organization_id FK
+    payment_provider provider
+    text provider_account_id
+    payment_account_status status
+    boolean charges_enabled
+    boolean payouts_enabled
+  }
+  payments {
+    uuid id PK
+    uuid order_id FK
+    payment_provider provider
+    text provider_ref
+    text provider_charge_ref
+    payment_status status
+    integer amount_minor
+    integer application_fee_minor
+    integer refunded_minor
+    text method_label
+  }
+  payment_attempts {
+    uuid id PK
+    uuid payment_id FK
+    payment_status status
+    text provider_event_id
+  }
+  payment_webhook_events {
+    uuid id PK
+    payment_provider provider
+    text provider_event_id
+    text type
+    jsonb payload
+    timestamptz processed_at
+    text outcome
+  }
+  refunds {
+    uuid id PK
+    uuid order_id FK
+    uuid payment_id FK
+    integer amount_minor
+    text reason
+    refund_status status
+    text provider_ref
+  }
+  refund_items {
+    uuid id PK
+    uuid refund_id FK
+    uuid ticket_id FK
+    integer amount_minor
+  }
+  ledger_accounts {
+    uuid id PK
+    uuid organization_id FK
+    ledger_account_kind kind
+    char currency
+  }
+  ledger_transactions {
+    uuid id PK
+    uuid organization_id FK
+    text kind
+    uuid order_id FK
+    text reference
+  }
+  ledger_entries {
+    uuid id PK
+    uuid transaction_id FK
+    uuid account_id FK
+    bigint amount_minor
+  }
+  financial_documents {
+    uuid id PK
+    uuid organization_id FK
+    text kind
+    text reference
+    uuid order_id FK
+  }
   outbox_events {
     uuid id PK
     text aggregate_type
@@ -268,6 +477,8 @@ erDiagram
 | `form_*`                                              | `UNIQUE (form_id, key)`, `UNIQUE (form_id, subject_type, subject_id)`, `UNIQUE (submission_id, field_id)`, FK composites                                                                                                                    | formulaires dynamiques cohérents par tenant (servis en phases 3/5)                                  |
 | `audit_logs`                                          | `CHECK actor_kind IN (…)`, `CHECK action ~ '^[a-z_]+\.[a-z_]+$'`                                                                                                                                                                            | journal structuré                                                                                   |
 | infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                    | idempotence, relais, surcharge par organisation                                                     |
+
+Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).
 
 La machine à états des événements (`draft → published → completed | cancelled`, `suspended`, `archived` terminal) vit dans `packages/domain/src/events/state-machine.ts` ; la base ne garde que les invariants exprimables (`CHECK`), la transition est gardée en transaction (verrou `FOR UPDATE` sur l'organisation à la publication, `version` pour la concurrence optimiste).
 

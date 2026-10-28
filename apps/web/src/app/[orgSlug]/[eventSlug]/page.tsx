@@ -1,10 +1,14 @@
 import { getPublicEvent } from "@kroov/domain/events";
 import { crossesMidnight, formatDateFr, formatRangeFr, formatTimeFr, NotFoundError } from "@kroov/domain/kernel";
+import { getPublicTicketing } from "@kroov/domain/ticketing";
 import { Alert, Button, EventPoster, Panel } from "@kroov/ui";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppPublicShell } from "@/components/public-shell";
 import { db } from "@/lib/db";
+import { fmtMinor } from "@/lib/money";
+import { ticketingContext } from "@/lib/ticketing";
 
 export async function generateMetadata({
   params,
@@ -35,6 +39,12 @@ export default async function PublicEventPage({ params }: { params: Promise<{ or
     throw error;
   }
   const tz = event.timezone;
+  const ticketing =
+    event.status === "published"
+      ? await getPublicTicketing(db(), event.organization.id, event.id, ticketingContext().fees)
+      : null;
+  const onSale = ticketing?.types.filter((t) => t.saleState === "on_sale") ?? [];
+  const cheapest = onSale.length > 0 ? Math.min(...onSale.map((t) => t.priceMinor)) : null;
   const midnight = crossesMidnight(event.startsAt, event.endsAt, tz);
   const programme = event.settings.programme?.split(/\n+/).filter((p) => p.trim().length > 0) ?? [];
   const description = event.description?.split(/\n+/).filter((p) => p.trim().length > 0) ?? [];
@@ -151,12 +161,28 @@ export default async function PublicEventPage({ params }: { params: Promise<{ or
         ) : null}
 
         <Panel className="mt-8 bg-lavender">
-          {event.status === "published" ? (
+          {event.status === "published" && ticketing?.open ? (
             <>
               <p className="text-[13px] font-bold">Billetterie</p>
               <p className="mt-1 text-[13px]">
-                La réservation en ligne ouvrira prochainement sur cette page.
-                {event.settings.externalUrl ? " En attendant, l'organisation propose un lien externe." : ""}
+                {onSale.length === 0
+                  ? "Aucun tarif en vente pour le moment."
+                  : cheapest === 0
+                    ? "Entrée gratuite sur réservation."
+                    : `À partir de ${fmtMinor(cheapest ?? 0, ticketing.currency)} (hors frais de service).`}
+              </p>
+              <div className="mt-3">
+                <Button asChild variant="primary">
+                  <Link href={`/${event.organization.slug}/${event.slug}/billets`}>Choisir mes billets →</Link>
+                </Button>
+              </div>
+            </>
+          ) : event.status === "published" ? (
+            <>
+              <p className="text-[13px] font-bold">Billetterie</p>
+              <p className="mt-1 text-[13px]">
+                {ticketing?.closedReason ?? "La billetterie n'est pas encore ouverte."}
+                {event.settings.externalUrl ? " L'organisation propose un lien externe." : ""}
               </p>
               {event.settings.externalUrl ? (
                 <div className="mt-3">

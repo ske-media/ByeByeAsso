@@ -16,9 +16,11 @@ const nextConfig: NextConfig = {
     "@kroov/config",
     "@kroov/auth",
     "@kroov/database",
+    "@kroov/payments",
+    "@kroov/notifications",
   ],
   // Server-only native modules must not be bundled.
-  serverExternalPackages: ["pg", "pino"],
+  serverExternalPackages: ["pg", "pino", "stripe"],
   poweredByHeader: false,
   // Keep the repo clean: do not generate AGENTS.md in apps/web.
   agentRules: false,

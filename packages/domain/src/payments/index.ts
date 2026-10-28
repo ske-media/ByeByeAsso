@@ -1,8 +1,16 @@
 /**
- * payments module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * payments module — public API: the provider port (implemented in @kroov/payments) and the
+ * payment-account / webhook services (implemented alongside orders in ticketing).
  */
 export const MODULE_NAME = "payments" as const;
+export {
+  getPaymentAccount,
+  type PaymentAccountView,
+  paymentStateMachine,
+  processProviderEvent,
+  reconcilePendingPayments,
+  startPaymentOnboarding,
+  syncPaymentAccount,
+  type WebhookOutcome,
+} from "../ticketing";
+export * from "./port";

@@ -1,8 +1,11 @@
 import { listAuditLog } from "@kroov/domain/organizations";
+import { getPaymentAccount, syncPaymentAccount } from "@kroov/domain/ticketing";
 import { ForbiddenState, PageHeader, Panel, PanelTitle } from "@kroov/ui";
 import type { Metadata } from "next";
 import { db } from "@/lib/db";
 import { loadOrgPage } from "@/lib/org-context";
+import { paymentProvider, ticketingContext } from "@/lib/ticketing";
+import { PaymentsPanel } from "./payments-panel";
 import { SettingsForm } from "./settings-form";
 
 export const metadata: Metadata = { title: "Paramètres" };
@@ -19,8 +22,15 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 /** Écran 24 (partie réglages) + journal d'audit. L'abonnement arrive avec la phase billing. */
-export default async function SettingsPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function SettingsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ paiements?: string }>;
+}) {
   const { slug } = await params;
+  const { paiements } = await searchParams;
   const ctx = await loadOrgPage(slug, `/o/${slug}/parametres`);
   if (!ctx.can("organization.manage")) {
     return (
@@ -31,6 +41,11 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
     );
   }
   const audit = await listAuditLog(db(), ctx.session.actor, ctx.organization.id, 20);
+  // Back from the provider's onboarding: refresh the account status before rendering.
+  let account = await getPaymentAccount(db(), ticketingContext(), ctx.session.actor, ctx.organization.id);
+  if (account && paiements === "retour") {
+    account = await syncPaymentAccount(db(), ticketingContext(), ctx.session.actor, ctx.organization.id);
+  }
 
   return (
     <>
@@ -46,10 +61,29 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
         </Panel>
         <div className="space-y-5">
           <Panel className="bg-lavender">
-            <PanelTitle>Abonnement et paiements</PanelTitle>
+            <PanelTitle>Paiements</PanelTitle>
+            <PaymentsPanel
+              organizationId={ctx.organization.id}
+              slug={slug}
+              providerName={paymentProvider().name}
+              simulated={paymentProvider().name === "fake"}
+              account={
+                account
+                  ? {
+                      status: account.status,
+                      chargesEnabled: account.chargesEnabled,
+                      payoutsEnabled: account.payoutsEnabled,
+                      providerAccountId: account.providerAccountId,
+                      lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
+                    }
+                  : null
+              }
+            />
+          </Panel>
+          <Panel>
+            <PanelTitle>Abonnement</PanelTitle>
             <p className="text-[13px]">
-              L'abonnement Kroov et le compte de versement arriveront avec la billetterie. Rien n'est facturé
-              aujourd'hui.
+              L'abonnement Kroov arrivera avec la facturation plateforme. Rien n'est facturé aujourd'hui.
             </p>
           </Panel>
           <Panel>

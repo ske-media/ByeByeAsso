@@ -1,6 +1,7 @@
 import { getProfile } from "@kroov/domain/identity";
 import { Badge, Panel, PanelTitle } from "@kroov/ui";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AppPublicShell } from "@/components/public-shell";
 import { db } from "@/lib/db";
 import { requireSession } from "@/lib/session";
@@ -30,7 +31,16 @@ export default async function ProfilePage() {
             <Badge tone="orange">Adresse à confirmer</Badge>
           )}
         </p>
-        <Panel className="mt-6">
+        <Panel className="mt-6 bg-lime">
+          <PanelTitle>Mes billets</PanelTitle>
+          <p className="text-[13px]">
+            Retrouvez les commandes passées avec cette adresse et vos billets à présenter à l'entrée.
+          </p>
+          <Link href="/moi/billets" className="mt-2 inline-block font-bold underline underline-offset-4">
+            Voir mes billets →
+          </Link>
+        </Panel>
+        <Panel>
           <PanelTitle>Identité</PanelTitle>
           <ProfileForm profile={{ name: profile.name, timezone: profile.timezone, phone: profile.phone ?? "" }} />
         </Panel>

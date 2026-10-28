@@ -1,62 +1,43 @@
-import type { Money } from "@kroov/domain/kernel";
+import type { PaymentProviderPort } from "@kroov/domain/payments";
+import { FakePaymentProvider } from "./fake";
+import { StripePaymentProvider } from "./stripe";
+
+export type { PaymentProviderPort } from "@kroov/domain/payments";
+export {
+  buildFakeWebhookBody,
+  FakePaymentProvider,
+  type FakeSession,
+  signFakeWebhook,
+  verifyFakeSignature,
+} from "./fake";
+export { StripePaymentProvider, stripeSignatureHeader } from "./stripe";
+
+export interface PaymentProviderConfig {
+  provider: "stripe" | "fake";
+  appEnv: "development" | "test" | "staging" | "production";
+  appUrl: string;
+  stripeSecretKey?: string | undefined;
+  stripeWebhookSecret?: string | undefined;
+  fakeWebhookSecret: string;
+}
 
 /**
- * Payment provider port. The Stripe Connect adapter (Phase 3) and the sandbox adapter
- * (tests) both implement this interface. Domain code never imports a provider SDK.
- *
- * Invariants the adapter must respect:
- * - Never report success from a redirect: only `verifyWebhook` + server-side retrieval
- *   are authoritative.
- * - Every call is idempotent on the provided `idempotencyKey`.
+ * Select the provider from configuration. The fake provider is a development/test tool and is
+ * refused outside those environments — exactly like the console/file e-mail adapters.
  */
-export interface CreateCheckoutInput {
-  readonly orderId: string;
-  readonly organizationPaymentAccountId: string;
-  readonly amount: Money;
-  readonly platformFee: Money;
-  readonly customerEmail: string;
-  readonly successUrl: string;
-  readonly cancelUrl: string;
-  readonly expiresAt: Date;
-  readonly idempotencyKey: string;
+export function createPaymentProvider(config: PaymentProviderConfig): PaymentProviderPort {
+  if (config.provider === "fake") {
+    if (config.appEnv === "production" || config.appEnv === "staging") {
+      throw new Error(`PAYMENT_PROVIDER=fake est interdit en ${config.appEnv}.`);
+    }
+    return new FakePaymentProvider({ appUrl: config.appUrl, webhookSecret: config.fakeWebhookSecret });
+  }
+  if (!config.stripeSecretKey || !config.stripeWebhookSecret) {
+    throw new Error("PAYMENT_PROVIDER=stripe requiert STRIPE_SECRET_KEY et STRIPE_WEBHOOK_SECRET.");
+  }
+  return new StripePaymentProvider({
+    secretKey: config.stripeSecretKey,
+    webhookSecret: config.stripeWebhookSecret,
+    appUrl: config.appUrl,
+  });
 }
-
-export interface CheckoutSession {
-  readonly providerSessionId: string;
-  readonly redirectUrl: string;
-}
-
-export type ProviderEventType =
-  | "payment.succeeded"
-  | "payment.failed"
-  | "payment.cancelled"
-  | "refund.succeeded"
-  | "refund.failed"
-  | "account.updated"
-  | "unknown";
-
-export interface ProviderEvent {
-  readonly providerEventId: string;
-  readonly type: ProviderEventType;
-  readonly occurredAt: Date;
-  readonly providerObjectId: string;
-  readonly raw: unknown;
-}
-
-export interface PaymentProviderPort {
-  readonly name: string;
-  createCheckoutSession(input: CreateCheckoutInput): Promise<CheckoutSession>;
-  /** Verify signature and parse; throws on invalid signature. */
-  verifyWebhook(rawBody: string, signatureHeader: string): Promise<ProviderEvent>;
-  /** Authoritative re-fetch of a payment's state from the provider. */
-  retrievePaymentStatus(providerObjectId: string): Promise<"pending" | "succeeded" | "failed" | "cancelled">;
-  createRefund(input: {
-    providerPaymentId: string;
-    amount: Money;
-    idempotencyKey: string;
-    reason?: string;
-  }): Promise<{ providerRefundId: string; status: "pending" | "succeeded" | "failed" }>;
-}
-
-/** Phase 0 exposes the contract only. Adapters are delivered in Phase 3. */
-export const PAYMENT_PORT_VERSION = 1 as const;

@@ -183,6 +183,8 @@ describeLive("S3. invitations and owner protection by API", () => {
 // Phase 2 — events, locations, public pages
 // ---------------------------------------------------------------------------------------------
 type EventJson = { id: string; slug: string; status: string; version: number };
+let eventB: EventJson; // draft in B (S4), published later for S5 cross-event scans
+let dave: ApiClient; // event-scoped manager of A on eventA2 only (S4), reused in S5
 const inDays = (days: number, hour: number) => {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() + days);
@@ -193,9 +195,7 @@ const inDays = (days: number, hour: number) => {
 describeLive("S4. events — tenant isolation, scoped grants and public exposure", () => {
   let eventA: EventJson; // draft in A (complete enough to publish)
   let eventA2: EventJson; // second draft in A (used for scoped grant)
-  let eventB: EventJson; // draft in B
   let locationA: { id: string };
-  let dave: ApiClient; // event-scoped manager of A on eventA2 only
 
   beforeAll(async () => {
     const loc = await alice.post(`/api/v1/organizations/${orgA.id}/locations`, {
@@ -354,5 +354,276 @@ describeLive("S4. events — tenant isolation, scoped grants and public exposure
       (await anon.get(`/api/v1/public/organizations/${orgA.slug}/events/${eventA.slug}`)).json,
     );
     expect(publicJson).not.toMatch(/organizationId|"version"|createdBy|publishedBy/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase 3 — ticketing: orders, payments, webhooks, scanner
+// ---------------------------------------------------------------------------------------------
+describeLive("S5. ticketing — isolation, forged confirmations, replay, scanner", () => {
+  let eventT: EventJson; // published event of A with open sales
+  let typeId: string;
+  let order: { id: string; accessToken: string };
+  let sessionId: string;
+
+  beforeAll(async () => {
+    // Payment account (fake provider) + published event + ticket type + sales open.
+    expect((await alice.post(`/api/v1/organizations/${orgA.id}/payment-account/onboarding-link`)).status).toBe(200);
+    const loc = await alice.post(`/api/v1/organizations/${orgA.id}/locations`, { name: "Salle T", city: "Paris" });
+    const ev = await alice.post(`/api/v1/organizations/${orgA.id}/events`, {
+      title: `Nuit Billetterie ${run}`,
+      description: "Une soirée pour tester que personne ne fabrique de billet sans payer.",
+      startsAt: inDays(20, 20),
+      endsAt: inDays(21, 2),
+      capacity: 10,
+      locationId: (loc.json as { data: { id: string } }).data.id,
+    });
+    eventT = (ev.json as { data: EventJson }).data;
+    const pub = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/publish`, {
+      version: eventT.version,
+    });
+    expect(pub.status).toBe(200);
+    const tt = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/ticket-types`, {
+      name: "Standard",
+      priceMinor: 3000,
+      quota: 5,
+    });
+    expect(tt.status).toBe(201);
+    typeId = (tt.json as { data: { id: string } }).data.id;
+    expect(
+      (await alice.patch(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/ticketing`, { ticketingStatus: "open" }))
+        .status,
+    ).toBe(200);
+  }, 60_000);
+
+  it("an outsider (Carol, no organization) cannot configure, read or refund anything of A's ticketing (403/404)", async () => {
+    expect(
+      (
+        await carol.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/ticket-types`, {
+          name: "Pirate",
+          priceMinor: 1,
+        })
+      ).status,
+    ).toBe(403);
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/ticket-types`)).status).toBe(403);
+    expect(
+      (
+        await carol.patch(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/ticketing`, {
+          ticketingStatus: "closed",
+        })
+      ).status,
+    ).toBe(403);
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/orders`)).status).toBe(403);
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/payment-account`)).status).toBe(403);
+    // A's type id under B's organization: not found (composite scope), nothing created.
+    expect(
+      (
+        await bob.patch(`/api/v1/organizations/${orgB.id}/events/${eventB.id}/ticket-types/${typeId}`, {
+          priceMinor: 1,
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("a guest reserves; the access token is required for every buyer call (uniform 404)", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const res = await anon.post("/api/v1/public/orders", {
+      organizationSlug: orgA.slug,
+      eventSlug: eventT.slug,
+      items: [{ ticketTypeId: typeId, quantity: 2 }],
+    });
+    expect(res.status).toBe(201);
+    order = (res.json as { data: { id: string; accessToken: string } }).data;
+    expect((await anon.get(`/api/v1/public/orders/${order.id}`)).status).toBe(404);
+    expect((await anon.get(`/api/v1/public/orders/${order.id}?k=wrong-token`)).status).toBe(404);
+    expect((await anon.get(`/api/v1/public/orders/${order.id}?k=${order.accessToken}`)).status).toBe(200);
+    // Another organization's slug with A's event slug: 404, no reservation.
+    expect(
+      (
+        await anon.post("/api/v1/public/orders", {
+          organizationSlug: orgB.slug,
+          eventSlug: eventT.slug,
+          items: [{ ticketTypeId: typeId, quantity: 1 }],
+        })
+      ).status,
+    ).toBe(404);
+    // Oversized quantity → 412 with a code, never a 500.
+    const big = await anon.post("/api/v1/public/orders", {
+      organizationSlug: orgA.slug,
+      eventSlug: eventT.slug,
+      items: [{ ticketTypeId: typeId, quantity: 10 }],
+    });
+    expect(big.status).toBe(412);
+  });
+
+  it("no ticket without a confirmed payment: redirect alone changes nothing, forged/replayed webhooks are rejected", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const q = `?k=${order.accessToken}`;
+    expect(
+      (
+        await anon.request("PATCH", `/api/v1/public/orders/${order.id}${q}`, {
+          email: `buyer-${run}@sec.kroov.local`,
+          firstName: "Buyer",
+          lastName: "Test",
+          attendees: [{ ticketTypeId: typeId, names: ["Buyer Test", "Plus One"] }],
+        })
+      ).status,
+    ).toBe(200);
+    const checkout = await anon.post(`/api/v1/public/orders/${order.id}/checkout${q}`);
+    expect(checkout.status).toBe(200);
+    const data = (checkout.json as { data: { kind: string; url: string } }).data;
+    expect(data.kind).toBe("redirect");
+    sessionId = data.url.split("/paiement/")[1]!;
+    // Visiting the success URL (what a redirect would do) does not pay the order.
+    const after = await anon.get(`/api/v1/public/orders/${order.id}${q}`);
+    expect((after.json as { data: { status: string; tickets: Array<{ status: string }> } }).data.status).toBe(
+      "awaiting_payment",
+    );
+    expect(
+      (after.json as { data: { tickets: Array<{ status: string }> } }).data.tickets.every(
+        (t) => t.status === "pending",
+      ),
+    ).toBe(true);
+    // Forged webhook without signature / with a bad signature: 400, order untouched.
+    const body = JSON.stringify({
+      id: `evt_forged_${run}`,
+      type: "payment.succeeded",
+      object_id: sessionId,
+      charge_ref: "ch_x",
+      occurred_at: new Date().toISOString(),
+    });
+    const forged = await fetch(`${baseUrl}/api/v1/payments/webhooks/fake`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-kroov-signature": "v1=00" },
+      body,
+    });
+    expect(forged.status).toBe(400);
+    const unsigned = await fetch(`${baseUrl}/api/v1/payments/webhooks/fake`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    expect(unsigned.status).toBe(400);
+    expect((await anon.get(`/api/v1/public/orders/${order.id}${q}`)).json).toMatchObject({
+      data: { status: "awaiting_payment" },
+    });
+    // Unknown provider route: 404.
+    expect((await fetch(`${baseUrl}/api/v1/payments/webhooks/stripe`, { method: "POST", body })).status).toBe(404);
+    // The buyer cannot set the status through PATCH (field ignored by the schema).
+    const patched = await anon.request("PATCH", `/api/v1/public/orders/${order.id}${q}`, {
+      email: `buyer-${run}@sec.kroov.local`,
+      firstName: "Buyer",
+      lastName: "Test",
+      status: "paid",
+    });
+    expect(patched.status).toBe(200);
+    expect((patched.json as { data: { status: string } }).data.status).toBe("awaiting_payment");
+  });
+
+  it("the legitimate (signed) webhook pays once; a replay is a no-op; the refund is capped", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const q = `?k=${order.accessToken}`;
+    // Settle through the simulated provider page endpoint (delivers the signed webhook).
+    const settled = await anon.post(`/api/v1/payments/fake/${sessionId}`, { decision: "succeeded" });
+    expect(settled.status).toBe(200);
+    expect((settled.json as { data: { outcome: string } }).data.outcome).toBe("applied");
+    const paid = await anon.get(`/api/v1/public/orders/${order.id}${q}`);
+    const view = (
+      paid.json as {
+        data: {
+          status: string;
+          tickets: Array<{ id: string; status: string }>;
+          ticketLinks: Record<string, string>;
+          totalMinor: number;
+        };
+      }
+    ).data;
+    expect(view.status).toBe("paid");
+    expect(view.tickets.map((t) => t.status)).toEqual(["valid", "valid"]);
+    // Replaying the settle delivers the same webhook again → duplicate, still 2 tickets.
+    const replay = await anon.post(`/api/v1/payments/fake/${sessionId}`, { decision: "succeeded" });
+    expect(["duplicate", "applied"]).toContain((replay.json as { data: { outcome: string } }).data.outcome);
+    const again = (await anon.get(`/api/v1/public/orders/${order.id}${q}`)).json as { data: { tickets: unknown[] } };
+    expect(again.data.tickets).toHaveLength(2);
+    // Organizer: B cannot read or refund; Dave (scoped to another event) cannot either; Alice can, capped.
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/orders/${order.id}`)).status).toBe(404);
+    expect(
+      (
+        await carol.post(`/api/v1/organizations/${orgA.id}/orders/${order.id}/refunds`, {
+          full: true,
+          reason: "Pirate",
+        })
+      ).status,
+    ).toBe(404);
+    expect((await dave.get(`/api/v1/organizations/${orgA.id}/orders/${order.id}`)).status).toBe(404);
+    const t1 = view.tickets[0]!.id;
+    const partial = await alice.post(`/api/v1/organizations/${orgA.id}/orders/${order.id}/refunds`, {
+      ticketIds: [t1],
+      reason: "Demande de l'acheteur",
+    });
+    expect(partial.status).toBe(200);
+    expect((partial.json as { data: { status: string } }).data.status).toBe("partially_refunded");
+    const twice = await alice.post(`/api/v1/organizations/${orgA.id}/orders/${order.id}/refunds`, {
+      ticketIds: [t1],
+      reason: "Encore",
+    });
+    expect(twice.status).toBe(412);
+    // Public order responses never leak internal identifiers of the payment provider objects.
+    expect(JSON.stringify(paid.json)).not.toMatch(/qrCredential|secretVersion|accessTokenHash/);
+  });
+
+  it("scanner: only checkins.scan on THAT event; another event's ticket is invalid; refunded tickets are refused", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const q = `?k=${order.accessToken}`;
+    const view = (await anon.get(`/api/v1/public/orders/${order.id}${q}`)).json as {
+      data: { tickets: Array<{ id: string; status: string }>; ticketLinks: Record<string, string> };
+    };
+    const valid = view.data.tickets.find((t) => t.status === "valid")!;
+    const refunded = view.data.tickets.find((t) => t.status === "refunded")!;
+    const page = (await anon.get(`/api/v1/public/tickets/${view.data.ticketLinks[valid.id]}`)).json as {
+      data: { qrCredential: string };
+    };
+    const refundedPage = (await anon.get(`/api/v1/public/tickets/${view.data.ticketLinks[refunded.id]}`)).json as {
+      data: { qrCredential: string | null };
+    };
+    expect(refundedPage.data.qrCredential).toBeNull();
+    expect((await anon.get("/api/v1/public/tickets/forged-token")).status).toBe(404);
+    // Bob (other organization) and Dave (scoped to another event of A) cannot scan here.
+    expect(
+      (
+        await carol.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/checkins`, {
+          credential: page.data.qrCredential,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await dave.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/checkins`, {
+          credential: page.data.qrCredential,
+        })
+      ).status,
+    ).toBe(403);
+    // Bob (owner of B) scanning A's credential at B's event: invalid, not disclosed.
+    const cross = await bob.post(`/api/v1/organizations/${orgB.id}/events/${eventB.id}/checkins`, {
+      credential: page.data.qrCredential,
+    });
+    expect(cross.status).toBe(200);
+    expect((cross.json as { data: { result: string; ticket: unknown } }).data).toMatchObject({
+      result: "invalid",
+      ticket: null,
+    });
+    // Alice (owner) admits once, then already_used.
+    const first = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/checkins`, {
+      credential: page.data.qrCredential,
+    });
+    expect((first.json as { data: { result: string } }).data.result).toBe("accepted");
+    const second = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/checkins`, {
+      credential: page.data.qrCredential,
+    });
+    expect((second.json as { data: { result: string } }).data.result).toBe("already_used");
+    // Anonymous: 401.
+    expect(
+      (await anon.post(`/api/v1/organizations/${orgA.id}/events/${eventT.id}/checkins`, { credential: "x" })).status,
+    ).toBe(401);
   });
 });

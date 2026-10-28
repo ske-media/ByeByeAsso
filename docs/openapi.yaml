@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.2.0-phase2
+  version: 0.3.0-phase3
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -13,6 +13,11 @@ info:
     Idempotence : les lectures sont idempotentes ; `POST /organizations` et `POST …/invitations` sont
     protégés par unicité (slug, e-mail en attente) ; `POST /invitations/{token}/accept` est à usage unique
     (412 au second appel). Transactions : chaque commande écrit son journal d'audit dans la même transaction.
+
+    Billetterie (phase 3) : les routes `/public/orders/*` sont authentifiées par le jeton d'accès acheteur
+    (`?k=` ou `Authorization: Bearer`), renvoyé UNE fois à la réservation ; toute erreur d'accès est un 404.
+    Les billets ne sont émis que par `POST /payments/webhooks/{provider}` (signature vérifiée, idempotent) ou
+    pour une commande gratuite — jamais sur la redirection de retour du prestataire.
 
     Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
     Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
@@ -228,6 +233,247 @@ components:
         - type: object
           properties:
             organization: { $ref: "#/components/schemas/PublicOrganization" }
+    TicketType:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        priceMinor: { type: integer, minimum: 0, description: "0 = gratuit (ni frais ni paiement)" }
+        currency: { type: string }
+        quota: { type: [integer, "null"] }
+        salesStartAt: { type: [string, "null"], format: date-time }
+        salesEndAt: { type: [string, "null"], format: date-time }
+        minPerOrder: { type: integer }
+        maxPerOrder: { type: integer }
+        hidden: { type: boolean }
+        position: { type: integer }
+        status: { type: string, enum: [active, archived] }
+        poolId: { type: [string, "null"] }
+        poolName: { type: [string, "null"] }
+        sold: { type: integer }
+        held: { type: integer }
+        available: { type: [integer, "null"], description: "null = illimité" }
+    TicketTypeWrite:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 80 }
+        description: { type: string }
+        priceMinor: { type: integer, minimum: 0 }
+        quota: { type: [integer, "null"] }
+        salesStartAt: { type: [string, "null"], format: date-time }
+        salesEndAt: { type: [string, "null"], format: date-time }
+        minPerOrder: { type: integer, minimum: 1, maximum: 50 }
+        maxPerOrder: { type: integer, minimum: 1, maximum: 50 }
+        hidden: { type: boolean }
+        position: { type: integer }
+        poolId: { type: [string, "null"], format: uuid }
+    TicketingSettings:
+      type: object
+      properties:
+        ticketingStatus: { type: string, enum: [not_configured, open, closed] }
+        maxTicketsPerOrder: { type: integer }
+        salesCloseAt: { type: [string, "null"], format: date-time }
+        nominativeTickets: { type: boolean }
+        capacity: { type: integer }
+        currency: { type: string }
+    OrderStatus:
+      type: string
+      enum: [draft, reserved, awaiting_payment, paid, failed, expired, partially_refunded, refunded]
+    TicketStatus:
+      type: string
+      enum: [pending, valid, used, revoked, refunded]
+    OrderTicket:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: KR-1048-01 }
+        attendeeName: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/TicketStatus" }
+        typeLabel: { type: string }
+        ticketTypeId: { type: string, format: uuid }
+        priceMinor: { type: integer }
+        feeMinor: { type: integer }
+        usedAt: { type: [string, "null"], format: date-time }
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: KR-1048 }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        organizationId: { type: string, format: uuid }
+        organizationName: { type: string }
+        organizationSlug: { type: string }
+        event:
+          type: object
+          properties:
+            id: { type: string }
+            slug: { type: string }
+            title: { type: string }
+            startsAt: { type: string, format: date-time }
+            endsAt: { type: string, format: date-time }
+            timezone: { type: string }
+            locationName: { type: [string, "null"] }
+            city: { type: [string, "null"] }
+            nominativeTickets: { type: boolean }
+        buyer:
+          type: object
+          properties:
+            email: { type: string }
+            firstName: { type: [string, "null"] }
+            lastName: { type: [string, "null"] }
+            userId: { type: [string, "null"] }
+        currency: { type: string }
+        subtotalMinor: { type: integer }
+        discountMinor: { type: integer }
+        feesMinor: { type: integer }
+        totalMinor: { type: integer, description: "= subtotal − discount + fees" }
+        promoCode: { type: [string, "null"] }
+        expiresAt: { type: [string, "null"], format: date-time }
+        paidAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        version: { type: integer }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              ticketTypeId: { type: string }
+              label: { type: string }
+              quantity: { type: integer }
+              unitPriceMinor: { type: integer }
+              unitFeeMinor: { type: integer }
+        tickets: { type: array, items: { $ref: "#/components/schemas/OrderTicket" } }
+        payment:
+          type: [object, "null"]
+          properties:
+            id: { type: string }
+            status: { type: string }
+            provider: { type: string, enum: [stripe, fake] }
+            methodLabel: { type: [string, "null"] }
+            amountMinor: { type: integer }
+            refundedMinor: { type: integer }
+            failureReason: { type: [string, "null"] }
+        refunds:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              amountMinor: { type: integer }
+              reason: { type: string }
+              status: { type: string, enum: [pending, succeeded, failed] }
+              createdAt: { type: string, format: date-time }
+              ticketIds: { type: array, items: { type: string } }
+        history:
+          type: array
+          items: { type: object, properties: { at: { type: string, format: date-time }, label: { type: string } } }
+    BuyerOrder:
+      description: "`Order` + `accessToken` (renvoyé à la réservation et sur les lectures acheteur) + `ticketLinks` (id billet → jeton de page billet)."
+      allOf:
+        - { $ref: "#/components/schemas/Order" }
+        - type: object
+          properties:
+            accessToken: { type: string }
+            ticketLinks: { type: object, additionalProperties: { type: string } }
+    OrderListItem:
+      type: object
+      properties:
+        id: { type: string }
+        number: { type: string }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        eventId: { type: string }
+        eventTitle: { type: string }
+        buyerEmail: { type: string }
+        buyerName: { type: string }
+        ticketsSummary: { type: string, example: "2 × Standard" }
+        ticketCount: { type: integer }
+        totalMinor: { type: integer }
+        currency: { type: string }
+        createdAt: { type: string, format: date-time }
+        paidAt: { type: [string, "null"], format: date-time }
+    TicketingStats:
+      type: object
+      properties:
+        paidTickets: { type: integer }
+        grossRevenueMinor: { type: integer, description: "billets payés, remises déduites, hors frais" }
+        refundedMinor: { type: integer }
+        pendingOrders: { type: integer }
+        admitted: { type: integer }
+        currency: { type: string }
+    PublicTicketType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        priceMinor: { type: integer }
+        unitFeeMinor: { type: integer, description: "frais acheteur par billet, annoncés avant paiement" }
+        currency: { type: string }
+        minPerOrder: { type: integer }
+        maxPerOrder: { type: integer }
+        available: { type: [integer, "null"] }
+        saleState: { type: string, enum: [upcoming, on_sale, ended, sold_out] }
+        salesStartAt: { type: [string, "null"], format: date-time }
+        salesEndAt: { type: [string, "null"], format: date-time }
+    PublicTicketing:
+      type: object
+      properties:
+        open: { type: boolean }
+        closedReason: { type: [string, "null"] }
+        maxTicketsPerOrder: { type: integer }
+        nominativeTickets: { type: boolean }
+        currency: { type: string }
+        types: { type: array, items: { $ref: "#/components/schemas/PublicTicketType" } }
+    TicketPage:
+      type: object
+      properties:
+        id: { type: string }
+        number: { type: string }
+        status: { $ref: "#/components/schemas/TicketStatus" }
+        attendeeName: { type: [string, "null"] }
+        typeLabel: { type: string }
+        priceMinor: { type: integer }
+        currency: { type: string }
+        qrCredential:
+          {
+            type: [string, "null"],
+            description: "identifiant opaque à encoder en QR ; null sauf billet valide/utilisé",
+          }
+        usedAt: { type: [string, "null"], format: date-time }
+        order:
+          { type: object, properties: { id: { type: string }, number: { type: string }, buyerName: { type: string } } }
+        event: { type: object }
+        organization: { type: object, properties: { name: { type: string }, slug: { type: string } } }
+        siblings: { type: array, items: { type: object } }
+    ScanOutcome:
+      type: object
+      properties:
+        result: { type: string, enum: [accepted, already_used, revoked, refunded, invalid] }
+        ticket:
+          {
+            type: [object, "null"],
+            properties:
+              { number: { type: string }, attendeeName: { type: [string, "null"] }, typeLabel: { type: string } },
+          }
+        firstScan:
+          {
+            type: [object, "null"],
+            properties: { at: { type: string, format: date-time }, byName: { type: [string, "null"] } },
+          }
+        scannedAt: { type: string, format: date-time }
+        counters: { type: object, properties: { admitted: { type: integer }, valid: { type: integer } } }
+    PaymentAccount:
+      type: object
+      properties:
+        provider: { type: string, enum: [stripe, fake] }
+        providerAccountId: { type: string }
+        status: { type: string, enum: [pending, active, restricted, disconnected] }
+        chargesEnabled: { type: boolean }
+        payoutsEnabled: { type: boolean }
+        lastSyncedAt: { type: [string, "null"], format: date-time }
     AuditEntry:
       type: object
       properties:
@@ -907,3 +1153,432 @@ paths:
               },
           }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # ----------------------------------------------------------------------------------------------
+  # Phase 3 — billetterie : tarifs, commandes, paiements, billets, contrôle
+  # ----------------------------------------------------------------------------------------------
+  /organizations/{organizationId}/events/{eventId}/ticket-types:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Tarifs avec compteurs (vendus, réservés, restants)
+      description: "`events.read`."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/TicketType" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Créer un tarif
+      description: "`tickets.manage`. Audit `ticket_type.created`."
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TicketTypeWrite" } } } }
+      responses:
+        "201":
+          {
+            description: Créé,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/TicketType" } } } },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/events/{eventId}/ticket-types/{ticketTypeId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: ticketTypeId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier un tarif
+      description: "`tickets.manage`. Le prix d'un billet déjà vendu ne change pas (instantané dans order_items)."
+      responses:
+        "200": { description: OK }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Validation" }
+    delete:
+      summary: Archiver un tarif
+      description: "`tickets.manage`. 412 tant que des réservations en cours l'utilisent."
+      responses:
+        "204": { description: Archivé }
+        "412": { description: Réservations en cours }
+  /organizations/{organizationId}/events/{eventId}/ticketing:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Paramètres de vente
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema: { type: object, properties: { data: { $ref: "#/components/schemas/TicketingSettings" } } },
+                  },
+              },
+          }
+    patch:
+      summary: Ouvrir / fermer les ventes, maximum par commande, clôture, billets nominatifs
+      description: "`tickets.manage`. Ouverture refusée (412) sans tarif actif ou si l'événement n'est pas publié."
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ticketingStatus: { type: string, enum: [open, closed] }
+                maxTicketsPerOrder: { type: integer, minimum: 1, maximum: 50 }
+                salesCloseAt: { type: [string, "null"], format: date-time }
+                nominativeTickets: { type: boolean }
+      responses:
+        "200": { description: OK }
+        "412": { description: Préconditions d'ouverture non remplies }
+  /organizations/{organizationId}/events/{eventId}/pools:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get: { summary: Pools de capacité partagée, responses: { "200": { description: OK } } }
+    post:
+      summary: Créer un pool
+      description: "`tickets.manage`. Corps { name, capacity }."
+      responses: { "201": { description: Créé } }
+  /organizations/{organizationId}/events/{eventId}/pools/{poolId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: poolId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete: { summary: Supprimer un pool, responses: { "204": { description: Supprimé } } }
+  /organizations/{organizationId}/events/{eventId}/promo-codes:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      {
+        summary: Codes promo et nombre d'utilisations,
+        description: "`tickets.manage`.",
+        responses: { "200": { description: OK } },
+      }
+    post:
+      summary: Créer un code
+      description: "`tickets.manage`. { code, kind: percent|amount, value (points de base | unités mineures), maxRedemptions?, validFrom?, validUntil? }."
+      responses: { "201": { description: Créé }, "409": { description: Code déjà utilisé } }
+  /organizations/{organizationId}/events/{eventId}/promo-codes/{promoCodeId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: promoCodeId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch: { summary: "Activer / désactiver { active }", responses: { "204": { description: OK } } }
+  /organizations/{organizationId}/orders:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Commandes de l'organisation (+ indicateurs)
+      description: "`orders.read` (périmètre événement respecté). Les réservations abandonnées sans coordonnées sont omises."
+      parameters:
+        - { name: eventId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/OrderStatus" } }
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      orders: { type: array, items: { $ref: "#/components/schemas/OrderListItem" } }
+                      stats: { $ref: "#/components/schemas/TicketingStats" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /organizations/{organizationId}/orders/{orderId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail d'une commande (organisateur)
+      description: "`orders.read` au périmètre de l'événement de la commande ; 404 sinon. Jamais de liens acheteur."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Order" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/orders/{orderId}/refunds:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Rembourser (total ou par billets)
+      description: |
+        `orders.refund`. Corps `{ full: true } | { ticketIds: [...] }` + `reason` (3–500 caractères).
+        Montant = prix − part de remise + frais de chaque billet ; jamais plus que encaissé − déjà remboursé
+        (verrou sur le paiement). Billets → `refunded` (places libérées), ledger, audit, e-mail à l'acheteur.
+        Commande gratuite : remboursement direct ; sinon via le prestataire (reverse transfer + commission).
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Order" } } } },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412":
+          { description: "order_not_refundable · already_refunded · refund_exceeds_payment · provider_refund_failed" }
+  /organizations/{organizationId}/orders/{orderId}/resend:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Renvoyer les billets
+      description: "`orders.read`. Les jetons des liens sont renouvelés : les anciens liens cessent de fonctionner."
+      responses: { "204": { description: Envoyé }, "412": { description: Commande non payée } }
+  /organizations/{organizationId}/events/{eventId}/checkins:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Contrôler un billet (scan)
+      description: |
+        `checkins.scan` sur CET événement. Corps `{ credential, device? }`. Admission atomique
+        (`UPDATE … WHERE status = 'valid'` + unique partiel). Un billet d'un autre événement ou un code
+        inconnu → `invalid` sans divulgation. Chaque tentative est journalisée.
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ScanOutcome" } } } },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /organizations/{organizationId}/events/{eventId}/checkins/summary:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      {
+        summary: Compteurs et derniers contrôles,
+        description: "`checkins.scan`.",
+        responses: { "200": { description: OK } },
+      }
+  /organizations/{organizationId}/payment-account:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Compte de paiement connecté
+      description: "`organization.manage`. `data: null` sans compte."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          { data: { oneOf: [{ $ref: "#/components/schemas/PaymentAccount" }, { type: "null" }] } },
+                      },
+                  },
+              },
+          }
+    post: { summary: Resynchroniser l'état depuis le prestataire, responses: { "200": { description: OK } } }
+  /organizations/{organizationId}/payment-account/onboarding-link:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Créer le compte connecté si besoin et obtenir l'URL d'inscription hébergée
+      description: "`organization.manage`. Stripe : Account Link Express. Fournisseur simulé : compte actif immédiatement."
+      responses: { "200": { description: "{ onboardingUrl, account }" } }
+  /public/organizations/{slug}/events/{eventSlug}/ticket-types:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+      - { name: eventSlug, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Tarifs visibles et disponibilité en direct
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/PublicTicketing" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/orders:
+    post:
+      summary: Réserver des places (10 minutes)
+      description: |
+        Anonyme ou connecté. Corps `{ organizationSlug, eventSlug, items: [{ ticketTypeId, quantity }] }`.
+        Sous verrou (organisation → événement) : aucune survente. Renvoie la commande `reserved` avec son
+        `accessToken` — seule réponse qui le contient. 412 `insufficient_inventory` / `ticketing_closed` /
+        `not_on_sale` / `quantity_out_of_range` / `max_per_order`.
+      security: []
+      responses:
+        "201":
+          {
+            description: Réservée,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/BuyerOrder" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Indisponible }
+        "422": { $ref: "#/components/responses/Validation" }
+  /public/orders/{orderId}:
+    parameters:
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, schema: { type: string }, description: Jeton d'accès acheteur (ou Authorization Bearer) }
+    get:
+      summary: Lecture acheteur
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/BuyerOrder" } } } },
+              },
+          }
+        "404": { description: Jeton absent ou invalide (uniforme) }
+    patch:
+      summary: Coordonnées, participants, consentement
+      description: "Tant que la commande n'est pas payée ni expirée. `status` n'est pas modifiable."
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, firstName, lastName]
+              properties:
+                email: { type: string }
+                firstName: { type: string }
+                lastName: { type: string }
+                attendees:
+                  {
+                    type: array,
+                    items:
+                      {
+                        type: object,
+                        properties: { ticketTypeId: { type: string }, names: { type: array, items: { type: string } } },
+                      },
+                  }
+                marketingOptIn: { type: boolean }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: order_locked · order_expired }
+        "422": { $ref: "#/components/responses/Validation" }
+  /public/orders/{orderId}/checkout:
+    parameters:
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, schema: { type: string } }
+    post:
+      summary: Démarrer le paiement
+      description: |
+        Gratuit → `{ kind: "paid" }` (billets émis). Sinon crée la session hébergée du prestataire sur le compte
+        connecté de l'organisation et renvoie `{ kind: "redirect", url }` ; la commande passe `awaiting_payment`
+        et la réservation est prolongée de 10 minutes. 412 `buyer_details_required` / `attendees_required` /
+        `payment_account_unavailable`.
+      security: []
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Préconditions }
+  /public/orders/{orderId}/promo:
+    parameters:
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, schema: { type: string } }
+    post:
+      summary: Appliquer un code promo
+      security: []
+      responses: { "200": { description: OK }, "412": { description: promo_invalid · promo_exhausted } }
+  /public/tickets/{viewToken}:
+    parameters:
+      - { name: viewToken, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Page d'un billet (porteur du lien)
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/TicketPage" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /payments/webhooks/{provider}:
+    parameters:
+      - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, fake] } }
+    post:
+      summary: Webhook du prestataire de paiement
+      description: |
+        Serveur → serveur : pas de session ni de vérification d'origine ; la signature sur le corps BRUT
+        (`Stripe-Signature` / `X-Kroov-Signature`) authentifie l'appel. Idempotent par (provider, event id) ;
+        hors séquence et paiements tardifs résolus sous verrou de la commande. 200 `{ received, outcome }`,
+        400 signature invalide, 404 prestataire non configuré, 500 → le prestataire réessaie.
+      security: []
+      responses:
+        "200": { description: Reçu }
+        "400": { description: Signature invalide }
+        "404": { description: Prestataire inconnu }
+  /payments/fake/{sessionId}:
+    parameters:
+      - { name: sessionId, in: path, required: true, schema: { type: string } }
+    get:
+      summary: "Fournisseur simulé (développement / test) : données de la session"
+      security: []
+      responses: { "200": { description: OK }, "404": { description: Hors environnement de test } }
+    post:
+      summary: "Fournisseur simulé : régler la session { decision: succeeded | failed } et livrer le webhook signé"
+      security: []
+      responses:
+        {
+          "200": { description: "{ status, webhookStatus, outcome, redirectUrl }" },
+          "404": { description: Hors environnement de test },
+        }

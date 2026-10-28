@@ -6,6 +6,7 @@ import pino from "pino";
 import { registerEventJobs } from "./jobs/events";
 import { registerMaintenanceJobs } from "./jobs/maintenance";
 import { registerOutboxRelay } from "./jobs/outbox-relay";
+import { registerTicketingJobs } from "./jobs/ticketing";
 import { createQueue } from "./queue";
 
 // Repo-root .env; existing process variables win.
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   await registerOutboxRelay({ queue, db: database.db, logger });
   await registerMaintenanceJobs({ queue, db: database.db, logger });
   await registerEventJobs({ queue, db: database.db, logger });
+  await registerTicketingJobs({ queue, db: database.db, env, logger });
 
   logger.info({ concurrency: env.WORKER_CONCURRENCY }, "worker started");
 

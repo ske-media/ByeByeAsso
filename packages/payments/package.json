@@ -3,16 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Payment provider port (Stripe Connect adapter in Phase 3) with a sandbox adapter for tests.",
+  "description": "Payment provider adapters implementing the domain port: stripe (Connect) and fake (local simulated provider for development and tests).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fake": "./src/fake.ts",
+    "./stripe": "./src/stripe.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root . --passWithNoTests"
   },
   "dependencies": {
-    "@kroov/domain": "workspace:*"
+    "@kroov/domain": "workspace:*",
+    "stripe": "23.0.1"
   },
   "devDependencies": {
     "@kroov/config": "workspace:*",

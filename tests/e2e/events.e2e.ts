@@ -159,7 +159,7 @@ test.describe("Phase 2 — événements", () => {
     await expect(page.getByText("Ouverture des portes à 20:00")).toBeVisible();
     await expect(page.getByText("Hangar 21").first()).toBeVisible();
     await expect(page.getByText("tête d'affiche")).toBeVisible();
-    await expect(page.getByText("La réservation en ligne ouvrira prochainement")).toBeVisible();
+    await expect(page.getByText("La billetterie n'est pas encore ouverte")).toBeVisible();
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     );

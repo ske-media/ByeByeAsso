@@ -15,13 +15,20 @@ export const DEFAULT_CURRENCY = "EUR" as const;
 export const API_PREFIX = "/api/v1" as const;
 
 /** Supported ISO 4217 currencies for the MVP. Amounts are always integer minor units. */
-export const SUPPORTED_CURRENCIES = ["EUR"] as const;
+export const SUPPORTED_CURRENCIES = ["EUR", "CHF"] as const;
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 /** Minor units per major unit for supported currencies. */
 export const CURRENCY_MINOR_UNITS: Record<SupportedCurrency, number> = {
   EUR: 2,
+  CHF: 2,
 };
+
+/** Inventory hold duration for a checkout (kit: « réservation de dix minutes »). */
+export const CHECKOUT_HOLD_MINUTES = 10 as const;
+
+/** Hard bound on tickets per order; the organizer sets a lower value per event. */
+export const MAX_TICKETS_PER_ORDER_LIMIT = 50 as const;
 
 /** Reserved organization slugs (routes that must never be shadowed by a tenant). */
 export const RESERVED_SLUGS = new Set([
@@ -38,6 +45,12 @@ export const RESERVED_SLUGS = new Set([
   "evenements",
   "events",
   "billets",
+  "billet",
+  "commande",
+  "commandes",
+  "paiement",
+  "invitation",
+  "o",
   "tickets",
   "scanner",
   "scan",

@@ -32,6 +32,8 @@ export const QUEUES = {
   maintenanceExpireIdempotency: "maintenance.expire-idempotency",
   maintenanceHeartbeat: "maintenance.heartbeat",
   eventsComplete: "events.complete-ended",
+  ordersExpire: "orders.expire-holds",
+  paymentsReconcile: "payments.reconcile",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

@@ -1,11 +1,13 @@
 import { EVENT_STATUS_LABELS, getEventBySlug, publicationChecklist } from "@kroov/domain/events";
 import { formatDateFr, formatRangeFr, NotFoundError } from "@kroov/domain/kernel";
+import { getTicketingSettings, ticketingStats } from "@kroov/domain/ticketing";
 import { Alert, Badge, Button, EventPoster, PageHeader, Panel, PanelTitle, Stat, StatGrid } from "@kroov/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
+import { fmtMinor } from "@/lib/money";
 import { loadOrgPage } from "@/lib/org-context";
 import { CopyLink, EventLifecycleActions } from "./actions-panel";
 
@@ -30,6 +32,10 @@ export default async function EventPilotPage({
     throw error;
   }
   const can = (p: Parameters<typeof ctx.can>[0]) => ctx.can(p, event.id);
+  const [stats, ticketing] = await Promise.all([
+    can("orders.read") ? ticketingStats(db(), ctx.session.actor, ctx.organization.id, event.id) : Promise.resolve(null),
+    getTicketingSettings(db(), ctx.session.actor, ctx.organization.id, event.id),
+  ]);
   const checklist = publicationChecklist(event);
   const missing = checklist.filter((c) => !c.ok);
   const publicUrl = `${env().APP_URL}/${ctx.organization.slug}/${event.slug}`;
@@ -135,12 +141,61 @@ export default async function EventPilotPage({
           </Panel>
 
           <Panel>
+            <PanelTitle>Billetterie</PanelTitle>
+            {stats ? (
+              <StatGrid className="sm:grid-cols-3 xl:grid-cols-3">
+                <Stat
+                  tone="lime"
+                  label="Billets payés"
+                  value={String(stats.paidTickets)}
+                  hint={`${stats.admitted} entrée(s) validée(s)`}
+                />
+                <Stat
+                  label="Recettes brutes"
+                  value={fmtMinor(stats.grossRevenueMinor, stats.currency)}
+                  hint="hors frais acheteur"
+                />
+                <Stat
+                  tone={stats.pendingOrders > 0 ? "orange" : "surface"}
+                  label="En attente"
+                  value={String(stats.pendingOrders)}
+                  hint="commandes à payer"
+                />
+              </StatGrid>
+            ) : null}
+            <p className="mt-3 text-[13px]">
+              Ventes :{" "}
+              <b>
+                {ticketing.ticketingStatus === "open"
+                  ? "ouvertes"
+                  : ticketing.ticketingStatus === "closed"
+                    ? "closes"
+                    : "non configurées"}
+              </b>
+              {ticketing.nominativeTickets ? " · billets nominatifs" : ""} · {ticketing.maxTicketsPerOrder} billets max.
+              par commande
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {can("events.read") ? (
+                <Button asChild size="sm" variant="secondary">
+                  <Link href={`/o/${slug}/evenements/${event.slug}/billets`}>Configurer les billets</Link>
+                </Button>
+              ) : null}
+              {can("orders.read") ? (
+                <Button asChild size="sm" variant="ghost">
+                  <Link href={`/o/${slug}/billetterie?evenement=${event.id}`}>Commandes</Link>
+                </Button>
+              ) : null}
+              {can("checkins.scan") ? (
+                <Button asChild size="sm" variant="ghost">
+                  <Link href={`/controle/${slug}/${event.slug}`}>Contrôle d'accès ↗</Link>
+                </Button>
+              ) : null}
+            </div>
+          </Panel>
+          <Panel>
             <PanelTitle>Prochaines étapes</PanelTitle>
             <ul className="m-0 list-none space-y-2 p-0 text-[13px]">
-              <li className="text-muted">
-                <b className="text-ink">Billetterie</b> — tarifs, quotas et paiement arrivent avec la prochaine version
-                de Kroov.
-              </li>
               <li className="text-muted">
                 <b className="text-ink">Équipe bénévole</b> — postes, candidatures et planning suivront.
               </li>

@@ -35,10 +35,17 @@ export const serverEnvSchema = z.object({
   // Authentication secret (Phase 1). 32+ chars enforced when present.
   AUTH_SECRET: z.string().min(32, "AUTH_SECRET doit faire au moins 32 caractères").optional(),
 
-  // Payments (Phase 3). Declared now so configuration is explicit from day one.
+  // Payments (Phase 3).
+  /** `stripe` in staging/production; `fake` (local simulated provider) only in development/test. */
+  PAYMENT_PROVIDER: z.enum(["stripe", "fake"]).default("fake"),
   STRIPE_SECRET_KEY: z.string().startsWith("sk_").optional(),
   STRIPE_WEBHOOK_SECRET: z.string().startsWith("whsec_").optional(),
   STRIPE_CONNECT_CLIENT_ID: z.string().optional(),
+  /** HMAC secret signing the simulated provider's webhooks (fake provider only). */
+  FAKE_PAYMENT_WEBHOOK_SECRET: z.string().min(16).default("fake-webhook-secret-for-local-use-only"),
+  /** Buyer fee per paid ticket = platform commission: basis points of the ticket price + fixed minor units. */
+  PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5000).default(400),
+  PLATFORM_FEE_FIXED_MINOR: z.coerce.number().int().min(0).max(100_000).default(0),
 
   // Email provider adapter (Phase 1 for transactional, Phase 8 for campaigns).
   EMAIL_PROVIDER: z.enum(["console", "file", "smtp", "resend"]).default("console"),
