@@ -48,6 +48,13 @@ export default async function ProfilePage() {
           </Link>
         </Panel>
         <Panel>
+          <PanelTitle>Mes candidatures bénévoles</PanelTitle>
+          <p className="text-[13px]">Vos candidatures, leur statut et, bientôt, vos missions.</p>
+          <Link href="/moi/candidatures" className="mt-2 inline-block font-bold underline underline-offset-4">
+            Voir mes candidatures →
+          </Link>
+        </Panel>
+        <Panel>
           <PanelTitle>Identité</PanelTitle>
           <ProfileForm profile={{ name: profile.name, timezone: profile.timezone, phone: profile.phone ?? "" }} />
         </Panel>

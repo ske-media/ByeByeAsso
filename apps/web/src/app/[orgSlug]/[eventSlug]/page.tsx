@@ -1,6 +1,7 @@
 import { getPublicEvent } from "@kroov/domain/events";
 import { crossesMidnight, formatDateFr, formatRangeFr, formatTimeFr, NotFoundError } from "@kroov/domain/kernel";
 import { getPublicTicketing } from "@kroov/domain/ticketing";
+import { getPublicVolunteering } from "@kroov/domain/volunteers";
 import { Alert, Button, EventPoster, Panel } from "@kroov/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -43,6 +44,8 @@ export default async function PublicEventPage({ params }: { params: Promise<{ or
     event.status === "published"
       ? await getPublicTicketing(db(), event.organization.id, event.id, ticketingContext().fees)
       : null;
+  const volunteering =
+    event.status === "published" ? await getPublicVolunteering(db(), event.organization.id, event.id) : null;
   const onSale = ticketing?.types.filter((t) => t.saleState === "on_sale") ?? [];
   const cheapest = onSale.length > 0 ? Math.min(...onSale.map((t) => t.priceMinor)) : null;
   const midnight = crossesMidnight(event.startsAt, event.endsAt, tz);
@@ -198,6 +201,20 @@ export default async function PublicEventPage({ params }: { params: Promise<{ or
             <p className="text-[13px]">Cet événement n'est plus ouvert.</p>
           )}
         </Panel>
+        {volunteering?.open ? (
+          <Panel className="mt-4 bg-lime">
+            <p className="text-[13px] font-bold">Devenir bénévole</p>
+            <p className="mt-1 text-[13px]">
+              {volunteering.positions.length} poste{volunteering.positions.length > 1 ? "s" : ""} à pourvoir :{" "}
+              {volunteering.positions.map((p) => p.name).join(", ")}. Candidature en deux minutes, sans compte.
+            </p>
+            <div className="mt-3">
+              <Button asChild variant="secondary">
+                <Link href={`/${event.organization.slug}/${event.slug}/benevoles`}>Je candidate →</Link>
+              </Button>
+            </div>
+          </Panel>
+        ) : null}
       </article>
     </AppPublicShell>
   );

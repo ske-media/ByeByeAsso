@@ -26,6 +26,16 @@ export class DomainError extends Error {
   }
 }
 
+/** Domain-level field validation (beyond Zod shape): `details.fieldErrors` maps field → messages. */
+export class ValidationError extends DomainError {
+  readonly fieldErrors: Readonly<Record<string, string[]>>;
+  constructor(fieldErrors: Record<string, string[]>, message = "Certaines valeurs sont invalides.") {
+    super("validation_failed", message, { fieldErrors });
+    this.name = "ValidationError";
+    this.fieldErrors = fieldErrors;
+  }
+}
+
 export class NotFoundError extends DomainError {
   constructor(resource: string, id?: string) {
     super("not_found", `${resource} introuvable.`, id ? { resource, id } : { resource });

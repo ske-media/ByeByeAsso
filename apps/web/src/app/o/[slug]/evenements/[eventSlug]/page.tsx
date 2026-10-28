@@ -1,6 +1,7 @@
 import { EVENT_STATUS_LABELS, getEventBySlug, publicationChecklist } from "@kroov/domain/events";
 import { formatDateFr, formatRangeFr, NotFoundError } from "@kroov/domain/kernel";
 import { getTicketingSettings, ticketingStats } from "@kroov/domain/ticketing";
+import { applicationStats, getVolunteering } from "@kroov/domain/volunteers";
 import { Alert, Badge, Button, EventPoster, PageHeader, Panel, PanelTitle, Stat, StatGrid } from "@kroov/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -32,9 +33,15 @@ export default async function EventPilotPage({
     throw error;
   }
   const can = (p: Parameters<typeof ctx.can>[0]) => ctx.can(p, event.id);
-  const [stats, ticketing] = await Promise.all([
+  const [stats, ticketing, volunteering, volunteerStats] = await Promise.all([
     can("orders.read") ? ticketingStats(db(), ctx.session.actor, ctx.organization.id, event.id) : Promise.resolve(null),
     getTicketingSettings(db(), ctx.session.actor, ctx.organization.id, event.id),
+    can("volunteers.review")
+      ? getVolunteering(db(), ctx.session.actor, ctx.organization.id, event.id)
+      : Promise.resolve(null),
+    can("volunteers.review")
+      ? applicationStats(db(), ctx.session.actor, ctx.organization.id, event.id)
+      : Promise.resolve(null),
   ]);
   const checklist = publicationChecklist(event);
   const missing = checklist.filter((c) => !c.ok);
@@ -193,14 +200,48 @@ export default async function EventPilotPage({
               ) : null}
             </div>
           </Panel>
-          <Panel>
-            <PanelTitle>Prochaines étapes</PanelTitle>
-            <ul className="m-0 list-none space-y-2 p-0 text-[13px]">
-              <li className="text-muted">
-                <b className="text-ink">Équipe bénévole</b> — postes, candidatures et planning suivront.
-              </li>
-            </ul>
-          </Panel>
+          {volunteering && volunteerStats ? (
+            <Panel>
+              <PanelTitle>Équipe bénévole</PanelTitle>
+              <StatGrid className="mt-2">
+                <Stat
+                  tone="lime"
+                  label="Personnes acceptées"
+                  value={String(volunteerStats.approved)}
+                  unit={volunteering.targetCount > 0 ? `/ ${volunteering.targetCount}` : undefined}
+                  hint="objectif"
+                />
+                <Stat tone="orange" label="À examiner" value={String(volunteerStats.toReview)} hint="candidatures" />
+                <Stat
+                  label="Affectations à couvrir"
+                  value={String(volunteering.requiredTotal)}
+                  hint="effectifs requis des créneaux"
+                />
+              </StatGrid>
+              <p className="mt-3 text-[13px]">
+                Recrutement : <b>{volunteering.recruitmentStatus === "open" ? "ouvert" : "fermé"}</b> ·{" "}
+                {volunteering.positions.filter((p) => p.status === "active").length} poste(s) activé(s). Le planning
+                (proposition automatique, arbitrage, publication) arrive à la phase suivante.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button asChild size="sm" variant="secondary">
+                  <Link href={`/o/${slug}/evenements/${event.slug}/benevoles`}>Postes et besoins</Link>
+                </Button>
+                <Button asChild size="sm" variant="ghost">
+                  <Link href={`/o/${slug}/benevoles?evenement=${event.id}`}>Candidatures</Link>
+                </Button>
+              </div>
+            </Panel>
+          ) : (
+            <Panel>
+              <PanelTitle>Prochaines étapes</PanelTitle>
+              <ul className="m-0 list-none space-y-2 p-0 text-[13px]">
+                <li className="text-muted">
+                  <b className="text-ink">Planning bénévole</b> — proposition automatique et publication (phase 6).
+                </li>
+              </ul>
+            </Panel>
+          )}
         </div>
 
         <div className="space-y-5">

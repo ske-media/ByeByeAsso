@@ -72,6 +72,7 @@ export const eventStatus = pgEnum("event_status", [
 export const eventVisibility = pgEnum("event_visibility", ["public", "unlisted", "private"]);
 /** not_configured: no sales yet · open: public ticket selection live · closed: sales closed by the organizer or by `sales_close_at`. */
 export const ticketingStatus = pgEnum("ticketing_status", ["not_configured", "open", "closed"]);
+export const volunteerRecruitmentStatus = pgEnum("volunteer_recruitment_status", ["closed", "open"]);
 
 /**
  * Lifecycle (typed state machine in @kroov/domain/events):
@@ -115,11 +116,21 @@ export const events = pgTable(
     salesCloseAt: timestamp("sales_close_at", { withTimezone: true, mode: "date" }),
     /** Each ticket carries an attendee name collected at checkout. */
     nominativeTickets: boolean("nominative_tickets").notNull().default(true),
+    /* Volunteering settings (phase 5; read by the scheduler in phase 6). */
+    volunteerRecruitmentStatus: volunteerRecruitmentStatus("volunteer_recruitment_status").notNull().default("closed"),
+    volunteerTargetCount: integer("volunteer_target_count").notNull().default(0),
+    /** Maximum hours a volunteer may be assigned per calendar day (0 = no limit). */
+    volunteerMaxHours: integer("volunteer_max_hours").notNull().default(10),
+    volunteerMinRestMinutes: integer("volunteer_min_rest_minutes").notNull().default(30),
     ...timestamps(),
   },
   (t) => [
     uniqueIndex("events_org_slug_uq").on(t.organizationId, t.slug),
     unique("events_org_id_uq").on(t.organizationId, t.id),
+    check(
+      "events_volunteer_settings",
+      sql`${t.volunteerTargetCount} >= 0 and ${t.volunteerMaxHours} between 0 and 24 and ${t.volunteerMinRestMinutes} between 0 and 1440`,
+    ),
     foreignKey({
       columns: [t.organizationId, t.locationId],
       foreignColumns: [eventLocations.organizationId, eventLocations.id],

@@ -158,6 +158,17 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Historique `membership_validity_changes` append-only (activation, prolongation, suspension, réactivation, expiration, annulation, renouvellement) avec acteur et motif ; chaque transition écrit aussi l'audit dans la même transaction.
 - Jobs worker : `memberships.expire` (quotidien 03:10 UTC) et `memberships.remind` (quotidien 08:40 UTC, rappel J-30 envoyé une seule fois grâce à `reminder_sent_at`, uniquement si une formule publique active permet de renouveler). Pas de renouvellement automatique : la personne choisit (écran 47), la nouvelle adhésion est liée par `renewed_from` et l'ancienne passe en `expired` à l'activation de la nouvelle.
 
+## 7sexies. Bénévoles (phase 5)
+
+- Domaine `packages/domain/src/volunteers` : `schemas.ts`, `state-machine.ts` (candidature `submitted → under_review | approved | waitlisted | rejected | withdrawn`, `approved ↔ waitlisted`, `assigned`/`confirmed` réservés à la phase 6), `availability.ts` (arithmétique d'intervalles pure : fusion, soustraction disponible − indisponible, couverture d'un créneau `full | partial | none`, validation dans la fenêtre événement ± 24 h), `catalogue.ts` (compétences, équipes, postes types et compétences requises), `staffing.ts` (réglages et questions de l'événement via les formulaires dynamiques, postes activés, créneaux, vue publique), `applications.ts` (candidature, suivi candidat, décisions, lot, vérification de compétence, matrice de disponibilité, « mes candidatures »), `emails.ts`.
+- Une candidature vise un événement ; une seule vivante par adresse et événement (index unique partiel). Numérotation `B-0001` par organisation.
+- Jeton candidat dérivé `HMAC(AUTH_SECRET, "volunteer-application":id:version)`, jamais stocké ; l'utilisateur connecté propriétaire (même `user_id` ou e-mail vérifié) accède sans jeton ; sinon 404 uniforme.
+- Deux vues séparées : `CandidateApplicationView` (jamais `internalNotes`, `reviewedBy`, ni résolution du binôme) et `ApplicationView` (équipe). Le binôme : le candidat ne voit que l'adresse qu'il a saisie et `reciprocal` (vrai seulement si l'autre l'a aussi nommé) ; la résolution par e-mail (nom, statut) n'existe que côté équipe. L'invitation e-mail au binôme ne dit rien d'autre que le nom de l'inviteur.
+- Questions personnalisées : aucune table nouvelle — `form_definitions` (`purpose = volunteer_application`, une par événement), `form_fields` (clé dérivée du libellé, réponses conservées par clé), `form_submissions` / `form_answers` (`subject_type = volunteer_application`). Validation serveur des réponses obligatoires et des options.
+- Contraintes dures posées pour la phase 6 : compétence obligatoire d'un poste satisfaite = déclarée **et** vérifiée quand `requires_verification` ; créneaux bornés (≤ 24 h, dans la fenêtre) ; `events.volunteer_max_hours` / `volunteer_min_rest_minutes` ; préférences de poste et binôme = contraintes souples.
+- Autorisation : `volunteers.review` (lecture catalogue, candidatures, décisions) et `volunteers.schedule` (postes activés, créneaux, réglages) évaluées au périmètre événement ; `listApplications` restreint un responsable limité à ses événements.
+- Décisions en lot : chaque enregistrement est validé et commité dans sa propre transaction ; le résultat est détaillé par enregistrement et un échec n'annule pas les autres.
+
 ## 8. Sécurité (fondation)
 
 - Environnement validé au démarrage (`packages/config/src/env.ts`) : échec explicite, chaînes vides = non configuré, secrets sans valeur par défaut.

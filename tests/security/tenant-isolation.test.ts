@@ -884,3 +884,241 @@ describeLive("S6. memberships — isolation, forged activation, members-only tic
     expect((await anon.post(`/api/v1/public/orders/${o.id}/checkout?k=${o.accessToken}`)).status).toBe(200);
   });
 });
+
+describeLive("S7. volunteers — isolation, candidate token, no exposure of other volunteers", () => {
+  let eventV: EventJson;
+  let positionId: string;
+  let sstId: string;
+  let application: { id: string; accessToken: string };
+  const candidateEmail = `maya-${run}@sec.kroov.local`;
+  const buddyEmail = `sam-${run}@sec.kroov.local`;
+  const inHours = (days: number, hour: number) => inDays(days, hour);
+
+  beforeAll(async () => {
+    const skill = await alice.post(`/api/v1/organizations/${orgA.id}/skills`, {
+      name: "Service au bar",
+    });
+    expect(skill.status).toBe(201);
+    const sst = await alice.post(`/api/v1/organizations/${orgA.id}/skills`, {
+      name: "SST",
+      requiresVerification: true,
+    });
+    sstId = (sst.json as { data: { id: string } }).data.id;
+    const team = await alice.post(`/api/v1/organizations/${orgA.id}/volunteer-teams`, { name: "Bar" });
+    const teamId = (team.json as { data: { id: string } }).data.id;
+    const position = await alice.post(`/api/v1/organizations/${orgA.id}/volunteer-positions`, {
+      teamId,
+      name: "Bar principal",
+      skills: [{ skillId: sstId, mandatory: true }],
+    });
+    expect(position.status).toBe(201);
+    positionId = (position.json as { data: { id: string } }).data.id;
+    const loc = await alice.post(`/api/v1/organizations/${orgA.id}/locations`, { name: "Salle V", city: "Paris" });
+    const ev = await alice.post(`/api/v1/organizations/${orgA.id}/events`, {
+      title: `Nuit des bénévoles ${run}`,
+      description: "Une soirée où l'on vérifie que personne ne voit la candidature d'un autre bénévole.",
+      startsAt: inHours(40, 18),
+      endsAt: inHours(41, 2),
+      capacity: 100,
+      locationId: (loc.json as { data: { id: string } }).data.id,
+    });
+    eventV = (ev.json as { data: EventJson }).data;
+    expect(
+      (await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventV.id}/publish`, { version: eventV.version }))
+        .status,
+    ).toBe(200);
+    const ep = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventV.id}/volunteer-positions`, {
+      positionId,
+    });
+    expect(ep.status).toBe(201);
+    const epId = (ep.json as { data: { id: string } }).data.id;
+    const shift = await alice.post(
+      `/api/v1/organizations/${orgA.id}/events/${eventV.id}/volunteer-positions/${epId}/shifts`,
+      { startsAt: inHours(40, 18), endsAt: inHours(40, 23), requiredCount: 2 },
+    );
+    expect(shift.status).toBe(201);
+    expect(
+      (
+        await alice.patch(`/api/v1/organizations/${orgA.id}/events/${eventV.id}/volunteering`, {
+          recruitmentStatus: "open",
+          questions: [{ label: "Taille de t-shirt", type: "single_choice", options: ["S", "M", "L"], required: true }],
+        })
+      ).status,
+    ).toBe(200);
+  }, 60_000);
+
+  it("an outsider and another organization cannot read or configure A's volunteering (403/404)", async () => {
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/skills`)).status).toBe(403);
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/volunteer-applications`)).status).toBe(403);
+    expect((await carol.get(`/api/v1/organizations/${orgA.id}/events/${eventV.id}/volunteering`)).status).toBe(403);
+    expect(
+      (
+        await bob.post(`/api/v1/organizations/${orgB.id}/volunteer-positions`, {
+          teamId: "00000000-0000-4000-8000-000000000000",
+          name: "Vol",
+        })
+      ).status,
+    ).toBe(404);
+    // A's event under B's organization: 404, nothing changed.
+    expect(
+      (
+        await bob.patch(`/api/v1/organizations/${orgB.id}/events/${eventV.id}/volunteering`, {
+          recruitmentStatus: "closed",
+        })
+      ).status,
+    ).toBe(404);
+    // Dave (event manager scoped to another event of A) sees nothing of this event.
+    expect((await dave.get(`/api/v1/organizations/${orgA.id}/events/${eventV.id}/volunteering`)).status).toBe(403);
+    expect(
+      (await dave.get(`/api/v1/organizations/${orgA.id}/volunteer-applications?eventId=${eventV.id}`)).status,
+    ).toBe(403);
+  });
+
+  it("a candidate applies; invalid ranges and missing answers are 422 with fieldErrors; the token is required (404)", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const base = `/api/v1/public/organizations/${orgA.slug}/events/${eventV.slug}/volunteer-applications`;
+    const bad = await anon.post(base, {
+      email: candidateEmail,
+      firstName: "Maya",
+      lastName: "Bernard",
+      positionPreferences: [positionId],
+      availabilities: [{ kind: "available", startsAt: inHours(10, 10), endsAt: inHours(10, 12) }],
+      answers: {},
+    });
+    expect(bad.status).toBe(422);
+    const fe = (bad.json as { error: { fieldErrors?: Record<string, string[]> } }).error.fieldErrors ?? {};
+    expect(Object.keys(fe).sort()).toEqual(["answers.taille_de_t_shirt", "availabilities"]);
+    const ok = await anon.post(base, {
+      email: candidateEmail,
+      firstName: "Maya",
+      lastName: "Bernard",
+      positionPreferences: [positionId],
+      availabilities: [{ kind: "available", startsAt: inHours(40, 16), endsAt: inHours(41, 3) }],
+      skills: [{ skillId: sstId }],
+      buddies: [buddyEmail],
+      answers: { taille_de_t_shirt: "M" },
+      status: "approved",
+      internalNotes: "pwn",
+    });
+    expect(ok.status).toBe(201);
+    application = (ok.json as { data: { id: string; accessToken: string } }).data;
+    const body = JSON.stringify(ok.json);
+    expect((ok.json as { data: { status: string } }).data.status).toBe("submitted");
+    expect(body).not.toMatch(/internalNotes|accessTokenHash|reviewedBy|targetApplicationId|targetName/);
+    expect((await anon.get(`/api/v1/public/volunteer-applications/${application.id}`)).status).toBe(404);
+    expect((await anon.get(`/api/v1/public/volunteer-applications/${application.id}?k=forged`)).status).toBe(404);
+    expect(
+      (await anon.get(`/api/v1/public/volunteer-applications/${application.id}?k=${application.accessToken}`)).status,
+    ).toBe(200);
+    // Duplicate live application → 409.
+    expect(
+      (
+        await anon.post(base, {
+          email: candidateEmail.toUpperCase(),
+          firstName: "Maya",
+          lastName: "Bernard",
+          positionPreferences: [positionId],
+          availabilities: [{ kind: "available", startsAt: inHours(40, 16), endsAt: inHours(41, 3) }],
+          answers: { taille_de_t_shirt: "M" },
+        })
+      ).status,
+    ).toBe(409);
+    // Other organization's slug with A's event slug → 404.
+    expect(
+      (
+        await anon.post(`/api/v1/public/organizations/${orgB.slug}/events/${eventV.slug}/volunteer-applications`, {
+          email: `x-${run}@sec.kroov.local`,
+          firstName: "X",
+          lastName: "Y",
+          positionPreferences: [positionId],
+          availabilities: [{ kind: "available", startsAt: inHours(40, 16), endsAt: inHours(41, 3) }],
+          answers: { taille_de_t_shirt: "M" },
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("the buddy wish never reveals whether the other person applied; staff-only fields are not patchable by the candidate", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const q = `?k=${application.accessToken}`;
+    const before = (await anon.get(`/api/v1/public/volunteer-applications/${application.id}${q}`)).json as {
+      data: { buddies: Array<{ email: string; reciprocal: boolean }> };
+    };
+    expect(before.data.buddies).toEqual([{ email: buddyEmail, reciprocal: false }]);
+    // Sam applies WITHOUT naming Maya: Maya's view must be byte-identical (no "has applied" signal).
+    const sam = await anon.post(
+      `/api/v1/public/organizations/${orgA.slug}/events/${eventV.slug}/volunteer-applications`,
+      {
+        email: buddyEmail,
+        firstName: "Sam",
+        lastName: "Moreau",
+        positionPreferences: [positionId],
+        availabilities: [{ kind: "available", startsAt: inHours(40, 16), endsAt: inHours(41, 3) }],
+        answers: { taille_de_t_shirt: "L" },
+      },
+    );
+    expect(sam.status).toBe(201);
+    const after = (await anon.get(`/api/v1/public/volunteer-applications/${application.id}${q}`)).json as {
+      data: { buddies: Array<{ email: string; reciprocal: boolean }> };
+    };
+    expect(after.data.buddies).toEqual(before.data.buddies);
+    // Candidate PATCH ignores status / internalNotes (schema strips them).
+    const patched = await anon.request("PATCH", `/api/v1/public/volunteer-applications/${application.id}${q}`, {
+      status: "approved",
+      internalNotes: "pwn",
+      constraints: "Départ à 1 h",
+    });
+    expect(patched.status).toBe(200);
+    expect((patched.json as { data: { status: string; constraints: string } }).data).toMatchObject({
+      status: "submitted",
+      constraints: "Départ à 1 h",
+    });
+    // Sam's token cannot read Maya's application.
+    const samToken = (sam.json as { data: { accessToken: string } }).data.accessToken;
+    expect((await anon.get(`/api/v1/public/volunteer-applications/${application.id}?k=${samToken}`)).status).toBe(404);
+  });
+
+  it("decisions: only A's reviewers; reject needs a reason (422); withdrawn is final; bulk reports per record", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const path = `/api/v1/organizations/${orgA.id}/volunteer-applications/${application.id}`;
+    expect((await carol.post(`${path}/approve`)).status).toBe(403);
+    expect(
+      (await bob.post(`/api/v1/organizations/${orgB.id}/volunteer-applications/${application.id}/approve`)).status,
+    ).toBe(404);
+    expect((await dave.post(`${path}/approve`)).status).toBe(403);
+    expect((await alice.post(`${path}/reject`, {})).status).toBe(422);
+    // Staff view carries the buddy resolution; the candidate's never does.
+    const staff = (await alice.get(path)).json as {
+      data: { internalNotes: string | null; buddies: Array<{ targetName: string | null }> };
+    };
+    expect(staff.data.internalNotes).toBeNull();
+    expect(staff.data.buddies[0]?.targetName).toBe("Sam Moreau");
+    expect((await alice.post(`${path}/approve`)).status).toBe(200);
+    // Verify SST: now eligible for the position (mandatory verified skill).
+    const verified = await alice.post(`${path}/skills/${sstId}`, { verified: true });
+    expect(
+      (verified.json as { data: { preferences: Array<{ eligible: boolean }> } }).data.preferences[0]?.eligible,
+    ).toBe(true);
+    const bulk = await alice.post(`/api/v1/organizations/${orgA.id}/volunteer-applications/bulk`, {
+      ids: [application.id, "00000000-0000-4000-8000-000000000000"],
+      action: "waitlist",
+    });
+    expect(bulk.status).toBe(200);
+    expect((bulk.json as { data: Array<{ ok: boolean }> }).data.map((r) => r.ok)).toEqual([true, false]);
+    const withdrawn = await anon.post(
+      `/api/v1/public/volunteer-applications/${application.id}/withdraw?k=${application.accessToken}`,
+      { reason: "Empêchement" },
+    );
+    expect(withdrawn.status).toBe(200);
+    expect((withdrawn.json as { data: { status: string } }).data.status).toBe("withdrawn");
+    expect((await alice.post(`${path}/approve`)).status).toBe(409);
+    expect(
+      (
+        await anon.post(
+          `/api/v1/public/volunteer-applications/${application.id}/withdraw?k=${application.accessToken}`,
+          {},
+        )
+      ).status,
+    ).toBe(409);
+  });
+});

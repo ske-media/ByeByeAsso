@@ -90,7 +90,11 @@ export function errorResponse(error: unknown, request: Request): NextResponse<Ap
   }
   if (isDomainError(error)) {
     const status = httpStatusFor(error.code);
-    return apiError(status, error.code, error.message, error.details ? { details: { ...error.details } } : undefined);
+    const fieldErrors = error.details?.fieldErrors as Record<string, string[]> | undefined;
+    return apiError(status, error.code, error.message, {
+      ...(fieldErrors ? { fieldErrors } : {}),
+      ...(error.details ? { details: { ...error.details } } : {}),
+    });
   }
   logger.error({ err: error, method: request.method, url: request.url }, "unhandled API error");
   return apiError(500, "internal", "Une erreur inattendue s'est produite.");

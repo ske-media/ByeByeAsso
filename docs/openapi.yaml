@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.4.0-phase4
+  version: 0.5.0-phase5
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -23,6 +23,12 @@ info:
     Les routes `/public/memberships/*` sont authentifiées par le jeton d'accès adhérent (`?k=` ou Bearer),
     renvoyé UNE fois à la demande ; l'activation d'une cotisation payante ne vient que du webhook signé.
     Un tarif `membersOnly` exige une adhésion active sur l'e-mail de la commande (412 `membership_required`).
+
+    Bénévoles (phase 5) : catalogue (compétences, équipes, postes types) et candidatures sous `volunteers.review`,
+    postes activés / créneaux / réglages sous `volunteers.schedule` (périmètre événement respecté). Les routes
+    `/public/volunteer-applications/*` sont authentifiées par le jeton candidat (`?k=` ou Bearer), renvoyé UNE fois ;
+    erreurs d'accès en 404 uniforme. Les notes internes ne sortent jamais des routes organisateur ; une déclaration
+    de binôme ne révèle jamais si l'autre personne a candidaté.
 
     Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
     Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
@@ -640,6 +646,335 @@ components:
         firstName: { type: string }
         lastName: { type: string }
         marketingOptIn: { type: boolean }
+    Skill:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        requiresVerification:
+          { type: boolean, description: "déclaration à vérifier par l'équipe avant de compter comme qualification" }
+        status: { type: string, enum: [active, archived] }
+        positionsCount: { type: integer }
+    VolunteerTeam:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        color: { type: string, enum: [lime, lavender, orange, neutral] }
+        position: { type: integer }
+        status: { type: string, enum: [active, archived] }
+        positionsCount: { type: integer }
+    VolunteerPosition:
+      type: object
+      description: Poste type de l'organisation (réutilisé d'un événement à l'autre).
+      properties:
+        id: { type: string, format: uuid }
+        teamId: { type: string, format: uuid }
+        teamName: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        instructions: { type: [string, "null"] }
+        minAge: { type: [integer, "null"] }
+        status: { type: string, enum: [active, archived] }
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              skillId: { type: string }
+              name: { type: string }
+              mandatory: { type: boolean, description: "contrainte dure du planning" }
+              requiresVerification: { type: boolean }
+    VolunteerPositionInput:
+      type: object
+      required: [teamId, name]
+      properties:
+        teamId: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        instructions: { type: string }
+        minAge: { type: [integer, "null"] }
+        position: { type: integer }
+        skills:
+          {
+            type: array,
+            items: { type: object, properties: { skillId: { type: string }, mandatory: { type: boolean } } },
+          }
+    VolunteerShift:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventPositionId: { type: string, format: uuid }
+        label: { type: [string, "null"] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        requiredCount: { type: integer }
+        maxCount: { type: integer }
+        notes: { type: [string, "null"] }
+        status: { type: string, enum: [active, cancelled] }
+        version: { type: integer }
+    ShiftInput:
+      type: object
+      required: [startsAt, endsAt]
+      properties:
+        label: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt:
+          {
+            type: string,
+            format: date-time,
+            description: "> startsAt, ≤ 24 h, dans la fenêtre de l'événement ± 1 jour",
+          }
+        requiredCount: { type: integer, minimum: 0 }
+        maxCount: { type: integer, minimum: 0, description: "≥ requiredCount ; défaut = requiredCount" }
+        notes: { type: string }
+    Volunteering:
+      type: object
+      properties:
+        eventId: { type: string, format: uuid }
+        recruitmentStatus: { type: string, enum: [closed, open] }
+        targetCount: { type: integer }
+        maxHoursPerDay: { type: integer }
+        minRestMinutes: { type: integer }
+        requiredTotal: { type: integer, description: "Σ requiredCount des créneaux actifs" }
+        questions: { type: array, items: { $ref: "#/components/schemas/VolunteerQuestion" } }
+        positions:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              positionId: { type: string, format: uuid }
+              name: { type: string }
+              teamName: { type: string }
+              briefing: { type: [string, "null"] }
+              status: { type: string, enum: [active, archived] }
+              requiredTotal: { type: integer }
+              shifts: { type: array, items: { $ref: "#/components/schemas/VolunteerShift" } }
+    VolunteerQuestion:
+      type: object
+      properties:
+        id: { type: string }
+        key: { type: string }
+        label: { type: string }
+        helpText: { type: [string, "null"] }
+        type: { type: string, enum: [short_text, long_text, single_choice, checkbox] }
+        required: { type: boolean }
+        options: { type: array, items: { type: string } }
+    VolunteeringSettingsInput:
+      type: object
+      properties:
+        recruitmentStatus:
+          { type: string, enum: [closed, open], description: "open exige ≥ 1 poste activé et un événement actif (412)" }
+        targetCount: { type: integer }
+        maxHoursPerDay: { type: integer, maximum: 24 }
+        minRestMinutes: { type: integer, maximum: 1440 }
+        questions:
+          type: array
+          maxItems: 12
+          description: Remplace la liste (clé dérivée du libellé, réponses conservées par clé).
+          items:
+            type: object
+            required: [label]
+            properties:
+              key: { type: string }
+              label: { type: string }
+              helpText: { type: string }
+              type: { type: string, enum: [short_text, long_text, single_choice, checkbox] }
+              required: { type: boolean }
+              options: { type: array, items: { type: string } }
+    AvailabilityRange:
+      type: object
+      required: [startsAt, endsAt]
+      properties:
+        kind: { type: string, enum: [available, unavailable], default: available }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        note: { type: string }
+    VolunteerApplicationInput:
+      type: object
+      required: [email, firstName, lastName, positionPreferences, availabilities]
+      properties:
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        phone: { type: string }
+        birthYear: { type: [integer, "null"] }
+        motivation: { type: string }
+        experience: { type: string }
+        positionPreferences:
+          {
+            type: array,
+            minItems: 1,
+            items: { type: string, format: uuid },
+            description: "postes types activés sur l'événement, du préféré au moins préféré",
+          }
+        availabilities:
+          {
+            type: array,
+            minItems: 1,
+            items: { $ref: "#/components/schemas/AvailabilityRange" },
+            description: "dans la fenêtre événement ± 24 h, plages disponibles sans chevauchement",
+          }
+        skills:
+          {
+            type: array,
+            items:
+              {
+                type: object,
+                properties:
+                  { skillId: { type: string }, level: { type: string, enum: [beginner, intermediate, expert] } },
+              },
+          }
+        buddies: { type: array, maxItems: 3, items: { type: string, format: email } }
+        constraints: { type: string }
+        marketingOptIn: { type: boolean }
+        answers:
+          {
+            type: object,
+            additionalProperties: { oneOf: [{ type: string }, { type: boolean }, { type: number }] },
+            description: "par clé de question",
+          }
+    CandidateEditableInput:
+      type: object
+      properties:
+        positionPreferences: { type: array, items: { type: string, format: uuid } }
+        availabilities: { type: array, items: { $ref: "#/components/schemas/AvailabilityRange" } }
+        skills:
+          { type: array, items: { type: object, properties: { skillId: { type: string }, level: { type: string } } } }
+        buddies: { type: array, items: { type: string, format: email } }
+        constraints: { type: string }
+        phone: { type: string }
+    CandidateApplication:
+      type: object
+      description: Vue candidat — jamais de notes internes, de métadonnées de revue, ni d'information sur un autre bénévole.
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: B-0001 }
+        organizationName: { type: string }
+        organizationSlug: { type: string }
+        event:
+          {
+            type: object,
+            properties:
+              {
+                id: { type: string },
+                slug: { type: string },
+                title: { type: string },
+                startsAt: { type: string, format: date-time },
+                endsAt: { type: string, format: date-time },
+                timezone: { type: string },
+              },
+          }
+        status:
+          {
+            type: string,
+            enum: [submitted, under_review, approved, waitlisted, rejected, assigned, confirmed, withdrawn],
+          }
+        email: { type: string }
+        firstName: { type: string }
+        lastName: { type: string }
+        decisionReason: { type: [string, "null"], description: motif communiqué (refus) }
+        preferences:
+          {
+            type: array,
+            items:
+              {
+                type: object,
+                properties:
+                  {
+                    rank: { type: integer },
+                    positionId: { type: string },
+                    positionName: { type: string },
+                    active: { type: boolean },
+                    eligible: { type: boolean },
+                  },
+              },
+          }
+        availabilities: { type: array, items: { $ref: "#/components/schemas/AvailabilityRange" } }
+        effectiveHours: { type: number }
+        skills:
+          {
+            type: array,
+            items:
+              {
+                type: object,
+                properties:
+                  {
+                    skillId: { type: string },
+                    name: { type: string },
+                    requiresVerification: { type: boolean },
+                    verified: { type: boolean },
+                  },
+              },
+          }
+        buddies:
+          {
+            type: array,
+            items: { type: object, properties: { email: { type: string }, reciprocal: { type: boolean } } },
+          }
+        answers:
+          {
+            type: array,
+            items: { type: object, properties: { key: { type: string }, label: { type: string }, value: {} } },
+          }
+        editable: { type: boolean }
+        accessToken: { type: string, description: "jeton candidat (dérivé, jamais stocké)" }
+    StaffApplication:
+      allOf:
+        - { $ref: "#/components/schemas/CandidateApplication" }
+        - type: object
+          properties:
+            internalNotes: { type: [string, "null"] }
+            reviewedBy: { type: [string, "null"] }
+            reviewedAt: { type: [string, "null"], format: date-time }
+            buddies:
+              {
+                type: array,
+                items:
+                  {
+                    type: object,
+                    properties:
+                      {
+                        email: { type: string },
+                        reciprocal: { type: boolean },
+                        targetApplicationId: { type: [string, "null"] },
+                        targetName: { type: [string, "null"] },
+                        targetStatus: { type: [string, "null"] },
+                      },
+                  },
+              }
+            shiftCoverage:
+              {
+                type: array,
+                items:
+                  {
+                    type: object,
+                    properties:
+                      {
+                        shiftId: { type: string },
+                        positionName: { type: string },
+                        startsAt: { type: string, format: date-time },
+                        endsAt: { type: string, format: date-time },
+                        coverage: { type: string, enum: [full, partial, none] },
+                      },
+                  },
+              }
+    ApplicationStats:
+      type: object
+      properties:
+        approved: { type: integer, description: "approved + assigned + confirmed (personnes)" }
+        target: { type: integer }
+        toReview: { type: integer }
+        waitlisted: { type: integer }
+        requiredTotal: { type: integer, description: "affectations à couvrir (≠ personnes)" }
   responses:
     Unauthenticated:
       {
@@ -1941,6 +2276,501 @@ paths:
         "201": { description: Nouvelle adhésion (avec son accessToken) }
         "404": { $ref: "#/components/responses/NotFound" }
         "412": { description: Déjà renouvelée }
+  /organizations/{organizationId}/skills:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Compétences de l'organisation
+      description: "`volunteers.review`."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/Skill" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Créer une compétence
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [name],
+                      properties:
+                        {
+                          name: { type: string },
+                          slug: { type: string },
+                          description: { type: string },
+                          requiresVerification: { type: boolean },
+                        },
+                    },
+                },
+            },
+        }
+      responses:
+        "201": { description: Créée }
+        "409": { description: Identifiant déjà utilisé }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/skills/{skillId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: skillId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier une compétence
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Archiver une compétence
+      responses:
+        "204": { description: Archivée }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/volunteer-teams:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Équipes
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/VolunteerTeam" } } },
+                      },
+                  },
+              },
+          }
+    post:
+      summary: Créer une équipe
+      responses:
+        "201": { description: Créée }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/volunteer-teams/{teamId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: teamId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier une équipe
+      responses:
+        "200": { description: OK }
+    delete:
+      summary: Archiver une équipe (412 `team_has_positions` si des postes actifs restent)
+      responses:
+        "204": { description: Archivée }
+        "412": { description: Postes actifs }
+  /organizations/{organizationId}/volunteer-positions:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Postes types (avec compétences requises)
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          { data: { type: array, items: { $ref: "#/components/schemas/VolunteerPosition" } } },
+                      },
+                  },
+              },
+          }
+    post:
+      summary: Créer un poste type
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/VolunteerPositionInput" } } },
+        }
+      responses:
+        "201": { description: Créé }
+        "404": { description: Équipe ou compétence inconnue dans l'organisation }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/volunteer-positions/{positionId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: positionId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier un poste type (compétences remplacées)
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/VolunteerPositionInput" } } },
+        }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Archiver un poste type
+      responses:
+        "204": { description: Archivé }
+  /organizations/{organizationId}/events/{eventId}/volunteering:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Réglages, questions, postes activés et créneaux de l'événement
+      description: "`volunteers.review` (périmètre événement honoré)."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Volunteering" } } } },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    patch:
+      summary: Modifier les réglages (recrutement, objectif, repos, questions)
+      description: "`volunteers.schedule`. Ouvrir exige ≥ 1 poste activé (412 `no_positions`)."
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/VolunteeringSettingsInput" } } },
+        }
+      responses:
+        "200": { description: OK }
+        "412": { description: Précondition }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/events/{eventId}/volunteer-positions:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Activer un poste type sur l'événement (idempotent)
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [positionId],
+                      properties: { positionId: { type: string, format: uuid }, briefing: { type: string } },
+                    },
+                },
+            },
+        }
+      responses:
+        "201": { description: Activé }
+        "412": { description: Poste archivé }
+  /organizations/{organizationId}/events/{eventId}/volunteer-positions/{eventPositionId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventPositionId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Briefing spécifique à l'événement
+      responses:
+        "200": { description: OK }
+    delete:
+      summary: Retirer le poste de l'événement (créneaux annulés, jamais supprimés)
+      responses:
+        "204": { description: Retiré }
+  /organizations/{organizationId}/events/{eventId}/volunteer-positions/{eventPositionId}/shifts:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventPositionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Créer un créneau
+      description: "`volunteers.schedule`. 412 `shift_outside_event` hors fenêtre ± 24 h ; 422 si fin ≤ début, > 24 h ou max < requis."
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftInput" } } } }
+      responses:
+        "201":
+          {
+            description: Créé,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/VolunteerShift" } } } },
+              },
+          }
+        "412": { description: Hors fenêtre / poste inactif }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/events/{eventId}/volunteer-positions/{eventPositionId}/shifts/{shiftId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventPositionId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: shiftId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier un créneau actif (version incrémentée)
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftInput" } } } }
+      responses:
+        "200": { description: OK }
+        "412": { description: Créneau annulé }
+    delete:
+      summary: Annuler un créneau
+      responses:
+        "204": { description: Annulé }
+  /organizations/{organizationId}/events/{eventId}/volunteer-availability-matrix:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Matrice bénévoles acceptés (et liste d'attente) × créneaux actifs
+      responses:
+        "200":
+          {
+            description: "{ shifts, volunteers: [{ id, name, status, effectiveHours, coverage: { shiftId: full|partial|none } }], availablePerShift }",
+          }
+  /organizations/{organizationId}/volunteer-applications:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: query, schema: { type: string, format: uuid } }
+      - {
+          name: status,
+          in: query,
+          schema:
+            {
+              type: string,
+              enum:
+                [
+                  all,
+                  to_review,
+                  submitted,
+                  under_review,
+                  approved,
+                  waitlisted,
+                  rejected,
+                  assigned,
+                  confirmed,
+                  withdrawn,
+                ],
+            },
+        }
+      - { name: positionId, in: query, schema: { type: string, format: uuid }, description: vœu présent }
+      - { name: skillId, in: query, schema: { type: string, format: uuid }, description: compétence déclarée }
+      - { name: q, in: query, schema: { type: string } }
+    get:
+      summary: Lister les candidatures + indicateurs
+      description: "`volunteers.review` ; un responsable limité à certains événements ne voit que ceux-ci."
+      responses:
+        "200":
+          {
+            description: "{ applications, stats }",
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          {
+                            data:
+                              {
+                                type: object,
+                                properties:
+                                  {
+                                    applications: { type: array, items: { type: object } },
+                                    stats: { $ref: "#/components/schemas/ApplicationStats" },
+                                  },
+                              },
+                          },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /organizations/{organizationId}/volunteer-applications/bulk:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Décision en lot
+      description: "`{ ids, action: review|approve|waitlist|reject, reason? }` → un résultat par enregistrement ; un échec ne bloque pas les autres."
+      responses:
+        "200": { description: "[{ id, ok, status?, error? }]" }
+  /organizations/{organizationId}/volunteer-applications/{applicationId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Fiche complète (vue équipe)
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/StaffApplication" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Modifier (identité, vœux, disponibilités, compétences + `verifiedSkillIds`, binôme, notes internes)
+      description: "`status` n'est jamais modifiable ici. 412 `closed` sur une candidature refusée ou retirée."
+      responses:
+        "200": { description: OK }
+        "409": { description: Adresse déjà utilisée par une autre candidature vivante }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/volunteer-applications/{applicationId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [review, approve, waitlist, reject] } }
+    post:
+      summary: Décision
+      description: "`reject` exige `{ reason }` (transmis au candidat). Transition illégale → 409 `invalid_transition`. E-mail envoyé (sauf review). Audit dans la transaction."
+      responses:
+        "200": { description: OK }
+        "409": { description: Transition impossible }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/volunteer-applications/{applicationId}/skills/{skillId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: skillId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Vérifier / dévérifier une compétence déclarée
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                { schema: { type: object, required: [verified], properties: { verified: { type: boolean } } } },
+            },
+        }
+      responses:
+        "200": { description: Fiche mise à jour }
+        "404": { description: Compétence non déclarée }
+  /public/organizations/{slug}/events/{eventSlug}/volunteering:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+      - { name: eventSlug, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Postes, horaires des créneaux, compétences et questions (événement publié)
+      security: []
+      responses:
+        "200": { description: "{ open, closedReason, positions, skills, questions }" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/organizations/{slug}/events/{eventSlug}/volunteer-applications:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+      - { name: eventSlug, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Candidater (sans compte)
+      description: |
+        Renvoie la candidature avec son `accessToken` — seule réponse qui le contient. 409 `application_exists`
+        (une candidature vivante par e-mail et événement) · 412 `recruitment_closed` · 422 `fieldErrors` (vœux,
+        disponibilités hors fenêtre ou chevauchantes, réponses obligatoires, binôme = soi-même).
+      security: []
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/VolunteerApplicationInput" } } },
+        }
+      responses:
+        "201":
+          {
+            description: Reçue,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      { type: object, properties: { data: { $ref: "#/components/schemas/CandidateApplication" } } },
+                  },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Candidature déjà en cours }
+        "412": { description: Recrutement fermé }
+        "422": { $ref: "#/components/responses/Validation" }
+  /public/volunteer-applications/{applicationId}:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: k,
+          in: query,
+          schema: { type: string },
+          description: Jeton candidat (ou Bearer,
+          ou compte propriétaire),
+        }
+    get:
+      summary: Suivi de candidature (vue candidat)
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      { type: object, properties: { data: { $ref: "#/components/schemas/CandidateApplication" } } },
+                  },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Modifier vœux, disponibilités, compétences, binôme, contraintes, téléphone
+      description: Tant que la candidature n'est pas affectée ni close (412 `not_editable`). `status` et notes ignorés.
+      security: []
+      requestBody:
+        {
+          required: true,
+          content: { application/json: { schema: { $ref: "#/components/schemas/CandidateEditableInput" } } },
+        }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Non modifiable }
+        "422": { $ref: "#/components/responses/Validation" }
+  /public/volunteer-applications/{applicationId}/withdraw:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, required: true, schema: { type: string } }
+    post:
+      summary: Retirer sa candidature (définitif)
+      security: []
+      requestBody:
+        {
+          required: false,
+          content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } },
+        }
+      responses:
+        "200": { description: Retirée }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Déjà close }
   /payments/webhooks/{provider}:
     parameters:
       - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, fake] } }

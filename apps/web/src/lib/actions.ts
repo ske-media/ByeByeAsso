@@ -26,10 +26,11 @@ export function actionError(error: unknown, values?: Record<string, string>): Ac
   }
   if (isDomainError(error)) {
     const field = typeof error.details?.field === "string" ? error.details.field : undefined;
+    const fieldErrors = error.details?.fieldErrors as Record<string, string[]> | undefined;
     return {
       status: "error",
       message: error.message,
-      ...(field ? { fieldErrors: { [field]: [error.message] } } : {}),
+      ...(fieldErrors ? { fieldErrors } : field ? { fieldErrors: { [field]: [error.message] } } : {}),
       ...(values ? { values } : {}),
     };
   }

@@ -1,8 +1,13 @@
 /**
- * volunteers module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * volunteers module — public API (phase 5: recruitment and qualification).
+ * Other modules must import ONLY from this file.
  */
 export const MODULE_NAME = "volunteers" as const;
+
+export * from "./applications";
+export * from "./availability";
+export * from "./catalogue";
+export * from "./emails";
+export * from "./schemas";
+export * from "./staffing";
+export * from "./state-machine";

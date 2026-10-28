@@ -29,6 +29,9 @@ export default async function OrganizationLayout({
         ticketing:
           ctx.can("orders.read") || [...ctx.member.eventPermissions.values()].some((p) => p.has("orders.read")),
         memberships: ctx.can("memberships.manage"),
+        volunteers:
+          ctx.can("volunteers.review") ||
+          [...ctx.member.eventPermissions.values()].some((p) => p.has("volunteers.review")),
         team: ctx.can("organization.read"),
         settings: ctx.can("organization.manage"),
       }}

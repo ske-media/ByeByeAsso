@@ -47,6 +47,23 @@ erDiagram
   memberships ||--o{ membership_validity_changes : "history (append-only)"
   memberships ||--o{ payments : "cotisation paid by"
   users |o--o{ memberships : "attached to (optional)"
+  organizations ||--o{ skills : catalogues
+  organizations ||--o{ volunteer_teams : organises
+  volunteer_teams ||--o{ volunteer_positions : groups
+  volunteer_positions ||--o{ position_required_skills : requires
+  skills ||--o{ position_required_skills : "required by"
+  events ||--o{ event_volunteer_positions : activates
+  volunteer_positions ||--o{ event_volunteer_positions : "instantiated on"
+  event_volunteer_positions ||--o{ volunteer_shifts : "staffed by"
+  events ||--o{ volunteer_applications : receives
+  volunteer_applications ||--o{ volunteer_position_preferences : ranks
+  volunteer_positions ||--o{ volunteer_position_preferences : "wished"
+  volunteer_applications ||--o{ volunteer_availabilities : declares
+  volunteer_applications ||--o{ volunteer_skills : declares
+  skills ||--o{ volunteer_skills : "declared as"
+  volunteer_applications ||--o{ volunteer_social_preferences : "wishes buddy"
+  volunteer_applications |o--o{ volunteer_social_preferences : "resolved target"
+  users |o--o{ volunteer_applications : "attached to (optional)"
   payments ||--o{ payment_attempts : "attempted"
   orders ||--o{ refunds : "refunded by"
   payments ||--o{ refunds : "reverses"
@@ -519,6 +536,122 @@ erDiagram
     text actor
     timestamptz created_at
   }
+  skills {
+    uuid id PK
+    uuid organization_id FK
+    text slug
+    text name
+    boolean requires_verification
+    volunteer_catalogue_status status
+  }
+  volunteer_teams {
+    uuid id PK
+    uuid organization_id FK
+    text slug
+    text name
+    text color
+    integer position
+    volunteer_catalogue_status status
+  }
+  volunteer_positions {
+    uuid id PK
+    uuid organization_id FK
+    uuid team_id FK
+    text slug
+    text name
+    text description
+    text instructions
+    integer min_age
+    volunteer_catalogue_status status
+  }
+  position_required_skills {
+    uuid id PK
+    uuid organization_id FK
+    uuid position_id FK
+    uuid skill_id FK
+    boolean mandatory
+  }
+  event_volunteer_positions {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    uuid position_id FK
+    text briefing
+    volunteer_catalogue_status status
+  }
+  volunteer_shifts {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    uuid event_position_id FK
+    text label
+    timestamptz starts_at
+    timestamptz ends_at
+    integer required_count
+    integer max_count
+    volunteer_shift_status status
+    integer version
+  }
+  volunteer_applications {
+    uuid id PK
+    uuid organization_id FK
+    uuid event_id FK
+    text number "B-0001 par organisation"
+    text email
+    text first_name
+    text last_name
+    text phone
+    uuid user_id FK
+    integer birth_year
+    text motivation
+    text experience
+    text constraints
+    boolean marketing_opt_in
+    volunteer_application_status status
+    text decision_reason
+    text internal_notes "jamais exposé au candidat"
+    uuid reviewed_by FK
+    timestamptz reviewed_at
+    timestamptz withdrawn_at
+    text access_token_hash
+    integer secret_version
+    integer version
+  }
+  volunteer_position_preferences {
+    uuid id PK
+    uuid organization_id FK
+    uuid application_id FK
+    uuid position_id FK
+    integer rank
+  }
+  volunteer_availabilities {
+    uuid id PK
+    uuid organization_id FK
+    uuid application_id FK
+    volunteer_availability_kind kind
+    timestamptz starts_at
+    timestamptz ends_at
+    text note
+  }
+  volunteer_skills {
+    uuid id PK
+    uuid organization_id FK
+    uuid application_id FK
+    uuid skill_id FK
+    volunteer_skill_level level
+    boolean verified
+    uuid verified_by FK
+    timestamptz verified_at
+  }
+  volunteer_social_preferences {
+    uuid id PK
+    uuid organization_id FK
+    uuid application_id FK
+    text target_email
+    uuid target_application_id FK
+    boolean reciprocal
+    timestamptz invited_at
+  }
   outbox_events {
     uuid id PK
     text aggregate_type
@@ -576,6 +709,13 @@ erDiagram
 | `memberships`                                         | `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK active_has_validity`, `CHECK cancel_reason`, FK composite `renewed_from → memberships (organization_id, id)`                                                       | numéros stables, jeton unique, pas d'adhésion active sans dates, renouvellement intra-organisation  |
 | `membership_validity_changes`                         | aucune mise à jour ni suppression (append-only par le domaine), `CHECK kind ~ '^[a-z_]+$'`                                                                                                                                                  | historique de validité inaltérable                                                                  |
 | `payments`                                            | `order_id` nullable, `membership_id` nullable, `CHECK payments_target_exclusive` (exactement une cible)                                                                                                                                     | un paiement règle une commande **ou** une cotisation, jamais les deux ni aucune                     |
+| `volunteer_applications`                              | `UNIQUE (event_id, email) WHERE status NOT IN ('rejected','withdrawn')`, `UNIQUE (organization_id, number)`, `UNIQUE (access_token_hash)`, `CHECK email = lower(email)`, `CHECK rejection ⇒ decision_reason`                                | **une candidature vivante par adresse et événement** ; motif obligatoire au refus                   |
+| `volunteer_shifts`                                    | `CHECK ends_at > starts_at`, `CHECK 0 ≤ required_count ≤ max_count`, `CHECK durée ≤ 24 h`, FK composites événement et poste                                                                                                                 | créneaux exploitables par le planning                                                               |
+| `volunteer_position_preferences`                      | `UNIQUE (application_id, position_id)`, `UNIQUE (application_id, rank)`, `CHECK rank ≥ 1`                                                                                                                                                   | vœux ordonnés sans doublon                                                                          |
+| `volunteer_availabilities`                            | `CHECK ends_at > starts_at` ; domaine : fenêtre événement ± 24 h, plages disponibles sans chevauchement                                                                                                                                     | disponibilités projetables sur les créneaux                                                         |
+| `volunteer_skills` / `volunteer_social_preferences`   | `UNIQUE (application_id, skill_id)` / `UNIQUE (application_id, target_email)`, `CHECK target_email = lower(...)`                                                                                                                            | une déclaration par compétence ; un souhait par adresse                                             |
+| `skills`, `volunteer_teams`, `volunteer_positions`    | `UNIQUE (organization_id, slug)`, `UNIQUE (organization_id, id)`, slugs validés                                                                                                                                                             | catalogue par organisation, cibles de FK composites                                                 |
+| `events`                                              | `CHECK volunteer_target_count ≥ 0, volunteer_max_hours ∈ [0,24], volunteer_min_rest_minutes ∈ [0,1440]`                                                                                                                                     | réglages de planning bornés                                                                         |
 | infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                    | idempotence, relais, surcharge par organisation                                                     |
 
 Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).
