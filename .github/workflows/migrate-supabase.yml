@@ -1,0 +1,51 @@
+name: Migrate Supabase
+
+# Applique les migrations SQL (packages/database/migrations) sur la base hébergée.
+# Déclenchement manuel uniquement. Secret requis : SUPABASE_DATABASE_URL
+# (URL « Transaction pooler » du projet, port 6543, ex.
+#  postgresql://postgres.<ref>:<mot de passe>@aws-0-<region>.pooler.supabase.com:6543/postgres).
+# Le runner Drizzle est idempotent : une migration déjà appliquée n'est jamais rejouée.
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: "Vérifier seulement (ne rien appliquer)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: migrate-supabase
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: production
+      APP_ENV: production
+      DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Secret présent ?
+        run: |
+          if [ -z "$DATABASE_URL" ]; then echo "::error::Secret SUPABASE_DATABASE_URL absent"; exit 1; fi
+      - name: État avant
+        run: |
+          psql "$DATABASE_URL" -Atc "select 'migrations déjà appliquées : ' || count(*) from drizzle_migrations" 2>/dev/null || echo "table drizzle_migrations absente (base vierge)"
+          psql "$DATABASE_URL" -Atc "select 'relations publiques : ' || count(*) from information_schema.tables where table_schema='public'"
+      - name: Appliquer les migrations
+        if: ${{ !inputs.verify_only }}
+        run: pnpm db:migrate
+      - name: État après
+        run: |
+          psql "$DATABASE_URL" -Atc "select 'migrations appliquées : ' || count(*) from drizzle_migrations"
+          psql "$DATABASE_URL" -Atc "select 'relations publiques : ' || count(*) from information_schema.tables where table_schema='public'"
+          psql "$DATABASE_URL" -Atc "select id || ' · ' || left(hash, 12) || '… · ' || to_timestamp(created_at / 1000)::text from drizzle_migrations order by id" | sed 's/^/  - /'
