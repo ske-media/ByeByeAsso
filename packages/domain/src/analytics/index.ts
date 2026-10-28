@@ -1,8 +1,8 @@
 /**
- * analytics module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * analytics module — public API (phase 9: organization / event dashboards and finance overview,
+ * computed from the authoritative records — ledger, orders, tickets, refunds, memberships,
+ * volunteers, published schedule, campaigns). No stored aggregates, no fixtures.
  */
 export const MODULE_NAME = "analytics" as const;
+
+export * from "./dashboards";

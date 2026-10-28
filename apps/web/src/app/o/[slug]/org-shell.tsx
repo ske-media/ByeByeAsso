@@ -21,10 +21,13 @@ export interface OrgNavProps {
     planning: boolean;
     contacts: boolean;
     marketing: boolean;
+    finances: boolean;
+    tasks: boolean;
     team: boolean;
     settings: boolean;
   };
   pendingInvitations?: number;
+  unreadNotifications?: number;
   children: ReactNode;
 }
 
@@ -39,6 +42,7 @@ export function OrgShell({
   organizations,
   sections,
   pendingInvitations,
+  unreadNotifications = 0,
   children,
 }: OrgNavProps) {
   const pathname = usePathname();
@@ -115,6 +119,26 @@ export function OrgShell({
           },
         ]
       : []),
+    ...(sections.finances
+      ? [
+          {
+            href: `${base}/finances`,
+            label: "Finances",
+            icon: "◆",
+            active: pathname.startsWith(`${base}/finances`),
+          },
+        ]
+      : []),
+    ...(sections.tasks
+      ? [
+          {
+            href: `${base}/taches`,
+            label: "Tâches",
+            icon: "☑",
+            active: pathname.startsWith(`${base}/taches`),
+          },
+        ]
+      : []),
     ...(sections.team
       ? [
           {
@@ -165,7 +189,13 @@ export function OrgShell({
                       ? "Contacts"
                       : crumbs[0] === "marketing"
                         ? "Marketing"
-                        : "Vue d'ensemble";
+                        : crumbs[0] === "finances"
+                          ? "Finances"
+                          : crumbs[0] === "taches"
+                            ? "Tâches"
+                            : crumbs[0] === "notifications"
+                              ? "Notifications"
+                              : "Vue d'ensemble";
 
   return (
     <OrganizationShell
@@ -177,7 +207,27 @@ export function OrgShell({
           <span className="text-muted">{organizationName}</span> <span aria-hidden="true">/</span> <b>{sectionLabel}</b>
         </span>
       }
-      topbarActions={<UserMenu name={userName} />}
+      topbarActions={
+        <>
+          <Link
+            href={`${base}/notifications`}
+            aria-label={unreadNotifications > 0 ? `Notifications : ${unreadNotifications} non lue(s)` : "Notifications"}
+            className="relative inline-flex size-9 items-center justify-center rounded-full border border-ink bg-surface text-[16px]"
+            data-testid="notifications-bell"
+          >
+            <span aria-hidden="true">🔔</span>
+            {unreadNotifications > 0 ? (
+              <span
+                aria-hidden="true"
+                className="absolute -top-1 -right-1 min-w-5 rounded-full bg-pink px-1 text-center text-[11px] font-bold leading-5"
+              >
+                {unreadNotifications > 99 ? "99+" : unreadNotifications}
+              </span>
+            ) : null}
+          </Link>
+          <UserMenu name={userName} />
+        </>
+      }
       footer={
         <>
           <b>Un coup de main ?</b>

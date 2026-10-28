@@ -6,7 +6,8 @@ OUTBOX="${EMAIL_FILE_PATH:-$ROOT/.tmp/outbox.jsonl}"
 case "${1:-}" in
   stop)
     pkill -f "next-server \(v" || true
-    pkill -f "tsx src/main.ts" || true
+    # Worker: the npm/sh wrapper, the tsx CLI and the node child all carry src/main.ts in their command line.
+    pkill -f "src/main.ts" || true
     sleep 1
     ;;
   start)

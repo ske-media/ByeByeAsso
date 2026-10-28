@@ -1,6 +1,6 @@
 # Diagramme entité-relation
 
-Mis à jour à chaque phase. Phase 0 : INFRASTRUCTURE · Phase 1 : AUTH (Better Auth) + IDENTITY · Phase 2 : EVENTS (lieux, événements, réglages, fichiers/médias, formulaires dynamiques — posés, servis par les phases 5 et 9) · Phase 3 : TICKETING (tarifs, pools, réservations, commandes, billets, contrôles, codes promo) + PAYMENTS (comptes connectés, paiements, webhooks, remboursements, ledger en partie double, documents financiers posés).
+Mis à jour à chaque phase. Phase 0 : INFRASTRUCTURE · Phase 1 : AUTH (Better Auth) + IDENTITY · Phase 2 : EVENTS (lieux, événements, réglages, fichiers/médias, formulaires dynamiques — posés, servis par les phases 5 et 9) · Phase 3 : TICKETING (tarifs, pools, réservations, commandes, billets, contrôles, codes promo) + PAYMENTS (comptes connectés, paiements, webhooks, remboursements, ledger en partie double, documents financiers posés) · Phase 9 : OPERATIONS (tâches, notifications internes, préférences ; `outbox_events.requeue_count`). Aucune table d'agrégats : les tableaux de bord sont des requêtes sur les sources de vérité.
 
 ```mermaid
 erDiagram
@@ -100,6 +100,13 @@ erDiagram
   tracking_links ||--o{ tracking_events : "clicked"
   campaign_recipients |o--o{ tracking_events : "by"
   campaigns |o--o{ orders : "attributed (link-level)"
+  organizations ||--o{ tasks : "tracks"
+  organization_members |o--o{ tasks : "assigned (same org)"
+  events |o--o{ tasks : "about (same org)"
+  organizations ||--o{ notifications : "emits"
+  users ||--o{ notifications : "receives"
+  organizations ||--o{ notification_preferences : "scopes"
+  users ||--o{ notification_preferences : "sets"
   payments ||--o{ payment_attempts : "attempted"
   orders ||--o{ refunds : "refunded by"
   payments ||--o{ refunds : "reverses"
@@ -972,6 +979,41 @@ erDiagram
     text user_agent
     timestamptz occurred_at
   }
+  tasks {
+    uuid id PK
+    uuid organization_id FK
+    text title
+    text description
+    task_status status
+    task_priority priority
+    timestamptz due_at
+    uuid assignee_member_id FK
+    uuid event_id FK
+    task_source source
+    text source_key
+    uuid created_by FK
+    timestamptz completed_at
+    uuid completed_by FK
+    int version
+  }
+  notifications {
+    uuid id PK
+    uuid organization_id FK
+    uuid user_id FK
+    text kind
+    text title
+    text body
+    text href
+    text dedupe_key
+    timestamptz read_at
+  }
+  notification_preferences {
+    uuid id PK
+    uuid organization_id FK
+    uuid user_id FK
+    text kind
+    boolean in_app
+  }
   outbox_events {
     uuid id PK
     text aggregate_type
@@ -979,6 +1021,8 @@ erDiagram
     jsonb payload
     uuid organization_id FK
     outbox_status status
+    int attempts
+    int requeue_count
   }
   job_executions {
     uuid id PK
@@ -1055,6 +1099,10 @@ erDiagram
 | `message_deliveries`                                  | `UNIQUE (provider, provider_message_id) WHERE NOT NULL`                                                                                                                                                                                                                                    | rappels fournisseur idempotents                                                                                                             |
 | `tracking_links` / `tracking_events`                  | `UNIQUE (token)`, `UNIQUE (campaign_id, target_url)`, `CHECK token 16–64`, `CHECK target_url ~ '^https?://'`, FK composites ; `CHECK user_agent ≤ 200`, **aucune colonne d'adresse IP**                                                                                                    | redirection seulement vers la cible enregistrée ; suivi sans IP                                                                             |
 | `orders` (+ phase 8)                                  | FK composites nullables `campaign_id`, `tracking_link_id`, `campaign_recipient_id` (`SET NULL`), index `(campaign_id, status)`                                                                                                                                                             | attribution au niveau du lien, jamais par résolution d'identité ; une campagne supprimée n'efface pas la commande                           |
+| `tasks`                                               | FK composites `(organization_id, assignee_member_id) → organization_members` et `(organization_id, event_id) → events` (`SET NULL`), `UNIQUE (organization_id, source_key) WHERE source_key IS NOT NULL`, `CHECK (status = 'done') = (completed_at IS NOT NULL)`, `CHECK version >= 1`     | **un responsable ou un événement d'une autre organisation est impossible** ; tâches système idempotentes ; terminée ⇔ datée                 |
+| `notifications`                                       | `UNIQUE (organization_id, user_id, dedupe_key)`, `CHECK kind ~ '^[a-z_]+\.[a-z_]+$'`, index partiel non-lues                                                                                                                                                                               | **une notification par membre et par événement de domaine** (consommateur idempotent sous retries)                                          |
+| `notification_preferences`                            | `UNIQUE (organization_id, user_id, kind)`                                                                                                                                                                                                                                                  | une préférence par membre et type                                                                                                           |
+| `outbox_events`                                       | `CHECK requeue_count >= 0`                                                                                                                                                                                                                                                                 | reprise bornée des lignes échouées (3 au plus, job horaire)                                                                                 |
 | infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                                                                   | idempotence, relais, surcharge par organisation                                                                                             |
 
 Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).
@@ -1068,3 +1116,5 @@ La machine à états des versions de planning (`draft → generating → propose
 Le statut marketing d'un contact (`marketing_email_status`) est une dénormalisation **dérivée** du journal `consent_records` et des exclusions, recalculée par le domaine (`refreshContact`) après chaque point de contact, consentement manuel, exclusion, levée ou fusion : exclusion > dernier enregistrement explicite (`opted_in` / `withdrawn`) > exception client (`customer_only`) > `none`. Une commande ou une adhésion sans case cochée produit un enregistrement `customer_exception` (base légale de l'exception « client existant », art. L.34-5 CPCE) qui ne vaut jamais `opted_in` et ne re-consent jamais après un retrait.
 
 La machine à états des campagnes (`draft → scheduled | cancelled`, `scheduled → draft | cancelled | sending`, `sending → sent | partially_failed | failed`, terminaux sans retour) vit dans `packages/domain/src/marketing/state-machine.ts` ; le passage en `sending` est réservé au worker sous `SELECT … FOR UPDATE SKIP LOCKED`. L'éligibilité d'un destinataire (consentement explicite — ou exception client si décidée —, absence d'exclusion active, adresse valide, pas de doublon) n'est jamais lue depuis l'instantané : elle est recalculée à l'envoi depuis `contacts` et `contact_suppressions`.
+
+Les tableaux de bord (phase 9) ne lisent que des sources de vérité : billets, commandes, contrôles, grand livre (`ledger_entries`, crédits négatifs), remboursements effectifs, adhésions, candidatures, planning publié, livraisons de campagnes. Le « net organisateur » est étiqueté estimation : hors frais du prestataire de paiement et versements, que Kroov ne connaît pas encore. Les notifications internes sont produites par le consommateur `domain.events` à partir des lignes d'outbox ; `dedupe_key = <type>:<agrégat>` garantit l'idempotence sous retries.

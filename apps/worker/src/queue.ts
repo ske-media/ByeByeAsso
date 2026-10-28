@@ -29,6 +29,8 @@ export async function createQueue(options: { connectionString: string; logger: L
  */
 export const QUEUES = {
   outboxRelay: "outbox.relay",
+  outboxRequeueFailed: "outbox.requeue-failed",
+  domainEvents: "domain.events",
   maintenanceExpireIdempotency: "maintenance.expire-idempotency",
   maintenanceHeartbeat: "maintenance.heartbeat",
   eventsComplete: "events.complete-ended",

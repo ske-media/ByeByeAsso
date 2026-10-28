@@ -1,6 +1,6 @@
 # Kroov — Architecture
 
-Version : Phase 8 (marketing responsable) · 28 octobre 2026.
+Version : Phase 9 (opérations : tableaux de bord, tâches, notifications) · 28 octobre 2026.
 
 Kroov est un **monolithe modulaire** TypeScript strict déployé en deux processus (web + worker) autour d'une base PostgreSQL unique et autoritaire. Les modules métier vivent dans `packages/domain` et exposent chacun une API publique ; aucune table n'est manipulée depuis un module étranger.
 
@@ -26,6 +26,7 @@ flowchart LR
     CRM[crm] --- MK[marketing]
     AN[analytics]
     TS[tasks]
+    NT[notifications]
     BL[billing]
     AU[audit]
   end
@@ -94,7 +95,7 @@ infra                 docker-compose (Postgres, MinIO, Mailpit)
 4. Les routes (`apps/web`) ne contiennent aucune règle métier : validation → appel de service avec un `Actor` → mapping des erreurs.
 5. Les effets de bord inter-modules passent par des événements typés écrits dans `outbox_events` **dans la même transaction** que la modification d'état.
 
-Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8 — livré), analytics/tasks (9), billing/audit (transverses, à partir de 1).
+Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8 — livré), analytics/tasks/notifications (9 — livrés), billing/audit (transverses, à partir de 1).
 
 ## 5. Noyau partagé (`packages/domain/src/kernel`)
 
@@ -119,7 +120,8 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 ## 7. Processus worker
 
 - pg-boss démarre dans le schéma `pgboss` de la même base ; files déclarées dans `apps/worker/src/queue.ts` (`QUEUES`), politique commune : 5 tentatives, backoff exponentiel, conservation 7 jours.
-- Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, marquage `dispatched`, backoff par ligne, échec définitif après 10 tentatives. Balayage de sûreté chaque minute ; les producteurs déclencheront le relais directement après commit (phase 1).
+- Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, publication sur la **file unique `domain.events`** (déclarée par le worker, `eventType` dans la charge utile), marquage `dispatched`, backoff par ligne, échec après 10 tentatives puis **reprise bornée** par `outbox.requeue-failed` (horaire : `failed → pending`, `attempts = 0`, `requeue_count + 1`, 3 reprises au plus). Balayage de sûreté chaque minute. Défaut corrigé en phase 9 : les phases 0–8 publiaient vers des files `event.<type>` jamais déclarées (pg-boss refuse l'envoi), toutes les lignes finissaient `failed`.
+- Consommateur `domain.events` (phase 9) : lots de 10, routage par type dans le domaine (`handleDomainEvent`) → notifications internes et tâches système, idempotents ; type inconnu acquitté.
 - Maintenance : purge horaire des `idempotency_records` expirés, heartbeat chaque minute.
 - Billetterie (phase 3) : `orders.expire-holds` chaque minute (réservations échues → `expired`, places libérées, billets `pending` → `revoked`) ; `payments.reconcile` toutes les 10 min (paiements `pending` depuis > 15 min réinterrogés chez le prestataire et traités comme leur webhook).
 - Marketing (phase 8) : `campaigns.dispatch` chaque minute — campagnes programmées échues (ou laissées `sending` par une panne) réclamées sous `FOR UPDATE SKIP LOCKED`, audience revalidée, envoi par lots avec tentatives bornées.
@@ -200,6 +202,14 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - **Rappels fournisseur** (`/api/v1/email/webhooks/{provider}`) : seul le fournisseur configuré est accepté ; signature sur le corps brut ; `delivered` / `bounced` (dur → exclusion `bounced`) / `complained` (→ exclusion `complaint`) / `failed` ; idempotent par `(provider, provider_message_id)` ; un rebond ne rétrograde jamais une livraison déjà rebondie. Adaptateur **Resend** livré (requête documentée, en-têtes List-Unsubscribe, clé d'idempotence) — vérification externe en attente faute de réseau sortant.
 - **Suivi et attribution** : les liens du corps deviennent `/l/{token}?r=<ref>` ; le clic enregistre un `tracking_event` (destinataire si jeton valide, user-agent tronqué, **jamais d'IP**), incrémente clics / clics uniques, puis redirige **uniquement** vers la cible enregistrée avec `utm_source=kroov`, `utm_medium=email`, `utm_campaign=<slug>` et `kc=<token>.<ref>`. La page publique garde `kc` en session ; la billetterie appelle `resolveAttribution` à la réservation et pose `campaign_id` / `tracking_link_id` / `campaign_recipient_id` sur la commande si la campagne est de la même organisation. Le rapport compte commandes attribuées, commandes payées et chiffre d'affaires **confirmé**, et affiche une mention d'attribution incomplète (pas de résolution d'identité).
 - Autorisation : `campaigns.manage` (brouillons, gabarits, aperçu, test, recomptage, destinataires, rapport) et `campaigns.send` (programmer, déprogrammer, annuler) ; références (segment, gabarit) vérifiées dans l'organisation (422) ; une campagne lancée n'est jamais annulée.
+
+## 7decies. Opérations : tableaux de bord, tâches, notifications, exports (phase 9)
+
+- Domaine `packages/domain/src/analytics/dashboards.ts` : `organizationDashboard` (période optionnelle sur les commandes payées, remboursements et écritures), `eventDashboard` (`analytics.read` ou `events.read` limité à l'événement), `financeOverview`, exports CSV (`exportFinanceJournalCsv` — une ligne par écriture, colonnes sens D/C et montant positif ; `exportEventReportCsv` — section / indicateur / valeur / source), tous audités. **Aucune table d'agrégats** : chaque métrique est une requête sur les sources de vérité et chaque montant porte sa `source` (grand livre `revenue_tickets` / `platform_fees` / `receivable_provider`, remboursements `succeeded`). Le net organisateur est une **estimation** (`estimate: true`) : frais du prestataire de paiement et versements inconnus. Les versements ne sont pas simulés ; l'écran Finances dit ce que le grand livre sait et ce qu'il ne sait pas.
+- Domaine `tasks` : `listTasks` (ouvertes / à moi / en retard / par événement, compteurs), `createTask`, `updateTask` (patch explicite sans défauts, jeton `version` → 409), `completeTask` / `reopenTask` (`done ⇔ completed_at`), `deleteTask`, `exportTasksCsv`, `ensureSystemTask` (idempotent par `(organization_id, source_key)`, `ON CONFLICT DO NOTHING`). Responsable = membre actif de l'organisation et événement de l'organisation vérifiés en transaction (404 sinon) en plus des FK composites. Lecture `organization.read`, écriture `tasks.manage`.
+- Domaine `notifications` : `recipientsByPermission` (membres actifs portant la permission à l'organisation ou au périmètre de l'événement), `notify` (une ligne par destinataire, `ON CONFLICT (organization_id, user_id, dedupe_key) DO NOTHING`, préférence `in_app = false` respectée, exclusion possible de l'acteur), `listNotifications` / `unreadCount` / `markRead` (toujours filtrés sur `user_id` de l'appelant·e : des ids étrangers donnent 0 mise à jour), `getPreferences` / `setPreferences` (audité). `handlers.ts` : table de routage `EVENT_ROUTING` (`volunteer_application.submitted → volunteers.review`, `schedule.unavailability_reported → volunteers.schedule` + tâche système « Remplacer X sur <poste> » échue au début du créneau, `campaign.finished → campaigns.manage`, `order.refunded → orders.refund`, `membership.activated → memberships.manage` si la formule exigeait une revue, `event.published → events.read` hors l'acteur). Un handler qui lève laisse pg-boss réessayer ; l'idempotence évite tout doublon.
+- UI : vue d'ensemble (écran 03) avec KPI réels, tâches en retard et notifications non lues dans « À faire aujourd'hui » ; `/o/[slug]/finances` (écran 22) ; blocs « Chiffres » (+ rapport CSV) et « Tâches » sur le pilotage d'événement ; `/o/[slug]/taches` (filtres, création / édition / terminer / rouvrir / supprimer, export) ; `/o/[slug]/notifications` (fil + préférences) ; cloche avec compteur de non-lues dans la barre supérieure (calculé côté serveur dans le layout). Entrées de navigation « Finances » (`analytics.read`) et « Tâches » (`organization.read`) ; slugs réservés `finances`, `taches`, `notifications`.
+- Sécurité : analytics / finances bornés à l'organisation ; exports audités ; tâches tenant-safe (FK composites + vérifications) ; notifications strictement par membre ; aucune valeur financière hors grand livre / remboursements effectifs.
 
 ## 8. Sécurité (fondation)
 

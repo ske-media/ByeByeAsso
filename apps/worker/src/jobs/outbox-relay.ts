@@ -1,5 +1,5 @@
 import { type Database, schema } from "@kroov/database";
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, lt, lte, sql } from "drizzle-orm";
 import type { Logger } from "pino";
 import { DEFAULT_QUEUE_OPTIONS, QUEUES, type Queue } from "../queue";
 
@@ -12,8 +12,10 @@ const MAX_ATTEMPTS = 10;
  * dispatched. Failures increment `attempts` with exponential backoff; after MAX_ATTEMPTS
  * the row is marked failed for human inspection.
  *
- * Phase 0 relays to a generic "domain-event" queue keyed by event type. Phase 1+ map
- * event types to concrete handlers (e-mails, notifications, analytics).
+ * Rows are published to the single `domain.events` queue (declared by the worker, see
+ * jobs/domain-events.ts) with `eventType` in the payload; the consumer routes by type.
+ * (Phases 0–8 published to `event.<type>` queues that were never declared, so pg-boss refused
+ * every send and the rows ended `failed` — fixed in phase 9, with a bounded requeue job.)
  */
 export async function relayOutboxBatch(db: Database, queue: Queue, logger: Logger): Promise<number> {
   return db.transaction(async (tx) => {
@@ -37,8 +39,9 @@ export async function relayOutboxBatch(db: Database, queue: Queue, logger: Logge
     let relayed = 0;
     for (const row of rows.rows) {
       try {
-        await queue.send(`event.${row.event_type}`, {
+        await queue.send(QUEUES.domainEvents, {
           outboxId: row.id,
+          eventType: row.event_type,
           aggregateType: row.aggregate_type,
           aggregateId: row.aggregate_id,
           organizationId: row.organization_id,
@@ -69,8 +72,31 @@ export async function relayOutboxBatch(db: Database, queue: Queue, logger: Logge
   });
 }
 
+/** Bounded requeue of failed rows: back to pending with a fresh attempt budget, at most MAX_REQUEUES times. */
+export const MAX_REQUEUES = 3;
+
+export async function requeueFailedOutbox(db: Database): Promise<number> {
+  const rows = await db
+    .update(schema.outboxEvents)
+    .set({
+      status: "pending",
+      attempts: 0,
+      requeueCount: sql`${schema.outboxEvents.requeueCount} + 1`,
+      availableAt: new Date(),
+    })
+    .where(and(eq(schema.outboxEvents.status, "failed"), lt(schema.outboxEvents.requeueCount, MAX_REQUEUES)))
+    .returning({ id: schema.outboxEvents.id });
+  return rows.length;
+}
+
 export async function registerOutboxRelay(ctx: { queue: Queue; db: Database; logger: Logger }): Promise<void> {
   await ctx.queue.createQueue(QUEUES.outboxRelay, DEFAULT_QUEUE_OPTIONS);
+  await ctx.queue.createQueue(QUEUES.outboxRequeueFailed, DEFAULT_QUEUE_OPTIONS);
+  await ctx.queue.work(QUEUES.outboxRequeueFailed, { batchSize: 1 }, async () => {
+    const requeued = await requeueFailedOutbox(ctx.db);
+    if (requeued > 0) ctx.logger.warn({ requeued }, "failed outbox rows requeued");
+  });
+  await ctx.queue.schedule(QUEUES.outboxRequeueFailed, "0 * * * *", undefined, { tz: "UTC" });
   await ctx.queue.work(QUEUES.outboxRelay, { batchSize: 1 }, async () => {
     const relayed = await relayOutboxBatch(ctx.db, ctx.queue, ctx.logger);
     if (relayed > 0) ctx.logger.info({ relayed }, "outbox relayed");

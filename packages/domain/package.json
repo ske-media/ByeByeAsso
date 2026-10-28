@@ -19,6 +19,7 @@
     "./marketing": "./src/marketing/index.ts",
     "./analytics": "./src/analytics/index.ts",
     "./tasks": "./src/tasks/index.ts",
+    "./notifications": "./src/notifications/index.ts",
     "./billing": "./src/billing/index.ts",
     "./audit": "./src/audit/index.ts",
     "./authorization": "./src/authorization/index.ts",

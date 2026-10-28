@@ -1600,3 +1600,151 @@ describeLive(
     }
   },
 );
+
+describeLive("S11. operations — analytics and finances bounded, tasks tenant-safe, notifications per member", () => {
+  // Note: bob is also organization_admin of A since S3, so cross-tenant checks use B's ids under A and A's ids under B.
+  let hugo: ApiClient; // volunteer_manager of A: organization.read + tasks.manage, no analytics.read
+  let ines: ApiClient; // marketing_manager of A: organization.read + analytics.read, no tasks.manage
+  let eventAId: string;
+  let eventBId: string;
+  let bobMemberId: string;
+  let taskId: string;
+  let version: number;
+  const api = (path: string) => `/api/v1/organizations/${orgA.id}${path}`;
+  const apiB = (path: string) => `/api/v1/organizations/${orgB.id}${path}`;
+
+  async function invited(name: string, role: string): Promise<ApiClient> {
+    const mail = `${name.toLowerCase()}-${run}@sec.kroov.local`;
+    const client = await signedInClient(baseUrl!, outbox, { name: `${name} S11`, email: mail, password });
+    expect((await alice.post(api("/invitations"), { email: mail, role })).status).toBe(201);
+    const link = lastEmailLink(outbox, mail, /https?:\/\/\S+\/invitation\/[A-Za-z0-9_-]+/);
+    expect((await client.post(`/api/v1/invitations/${link.split("/invitation/")[1]!}/accept`)).status).toBe(200);
+    return client;
+  }
+
+  beforeAll(async () => {
+    hugo = await invited("Hugo", "volunteer_manager");
+    ines = await invited("Ines", "marketing_manager");
+    const mk = (client: ApiClient, org: string, title: string) =>
+      client.post(`/api/v1/organizations/${org}/events`, {
+        title: `${title} ${run}`,
+        description: "Un événement de test pour la phase 9, avec une description assez longue pour passer.",
+        startsAt: inDays(40, 18),
+        endsAt: inDays(40, 23),
+        capacity: 100,
+      });
+    const a = await mk(alice, orgA.id, "Ops A");
+    const b = await mk(bob, orgB.id, "Ops B");
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    eventAId = (a.json as { data: { id: string } }).data.id;
+    eventBId = (b.json as { data: { id: string } }).data.id;
+    const members = await bob.get(apiB("/members"));
+    bobMemberId = (members.json as { data: Array<{ id: string }> }).data[0]!.id;
+  }, 90_000);
+
+  it("analytics and finances need analytics.read in the organization; event dashboards never cross tenants", async () => {
+    expect((await alice.get(api("/analytics/organization"))).status).toBe(200);
+    expect((await ines.get(api("/analytics/organization"))).status).toBe(200);
+    expect((await hugo.get(api("/analytics/organization"))).status).toBe(403);
+    expect((await dave.get(api("/analytics/organization"))).status).toBe(403); // event-scoped grant only
+    expect((await carol.get(api("/analytics/organization"))).status).toBe(403);
+    expect((await alice.get(apiB("/analytics/organization"))).status).toBe(403);
+    expect((await alice.get(api(`/analytics/events/${eventAId}`))).status).toBe(200);
+    expect((await alice.get(api(`/analytics/events/${eventBId}`))).status).toBe(404);
+    expect((await alice.get(apiB(`/analytics/events/${eventBId}`))).status).toBe(403);
+    expect((await carol.get(api(`/analytics/events/${eventAId}`))).status).toBe(403);
+    expect((await alice.get(api("/analytics/organization?from=not-a-date"))).status).toBe(422);
+    expect((await hugo.get(api("/finances"))).status).toBe(403);
+    expect((await hugo.get(api("/finances/export"))).status).toBe(403);
+    expect((await carol.get(api("/finances"))).status).toBe(403);
+    const finances = await alice.get(api("/finances"));
+    expect(finances.status).toBe(200);
+    expect((finances.json as { data: { payouts: { available: boolean } } }).data.payouts.available).toBe(false);
+    const exported = await alice.get(api("/finances/export"));
+    expect(exported.status).toBe(200);
+    expect(exported.response.headers.get("content-type")).toContain("text/csv");
+    const report = await alice.get(api(`/events/${eventAId}/report/export`));
+    expect(report.status).toBe(200);
+    expect((await carol.get(api(`/events/${eventAId}/report/export`))).status).toBe(403);
+    expect((await alice.get(api(`/events/${eventBId}/report/export`))).status).toBe(404);
+    const audit = await alice.get(api("/audit"));
+    const actions = (audit.json as { data: Array<{ action: string }> }).data.map((e) => e.action);
+    expect(actions).toEqual(expect.arrayContaining(["finances.exported", "event_report.exported"]));
+  });
+
+  it("tasks: organization.read to list, tasks.manage to write; assignee and event must belong to the organization", async () => {
+    expect((await carol.get(api("/tasks"))).status).toBe(403);
+    expect((await dave.get(api("/tasks"))).status).toBe(403);
+    expect((await ines.get(api("/tasks"))).status).toBe(200);
+    expect((await ines.post(api("/tasks"), { title: "Interdit" })).status).toBe(403);
+    expect((await hugo.post(api("/tasks"), { title: "Forgé", assigneeMemberId: bobMemberId })).status).toBe(404);
+    expect((await hugo.post(api("/tasks"), { title: "Forgé", eventId: eventBId })).status).toBe(404);
+    expect((await hugo.post(api("/tasks"), { title: "", priority: "urgent" })).status).toBe(422);
+    const created = await hugo.post(api("/tasks"), { title: `Tâche S11 ${run}`, eventId: eventAId, priority: "high" });
+    expect(created.status).toBe(201);
+    const task = (created.json as { data: { id: string; version: number } }).data;
+    taskId = task.id;
+    version = task.version;
+    // Other tenant: never visible, never writable, even with the real id.
+    expect((await bob.get(apiB(`/tasks/${taskId}`))).status).toBe(404);
+    expect((await bob.patch(apiB(`/tasks/${taskId}`), { title: "Pwn" })).status).toBe(404);
+    expect((await bob.delete(apiB(`/tasks/${taskId}`))).status).toBe(404);
+    expect((await carol.patch(api(`/tasks/${taskId}`), { title: "Pwn" })).status).toBe(403);
+    expect((await carol.post(api(`/tasks/${taskId}/complete`), {})).status).toBe(403);
+    expect((await ines.patch(api(`/tasks/${taskId}`), { title: "Pwn" })).status).toBe(403);
+    expect((await ines.delete(api(`/tasks/${taskId}`))).status).toBe(403);
+    // Stale version token is a 409; the source and the organization cannot be rewritten.
+    expect((await hugo.patch(api(`/tasks/${taskId}`), { title: "Vieux", version: version + 7 })).status).toBe(409);
+    const patched = await hugo.patch(api(`/tasks/${taskId}`), {
+      title: "Renommée",
+      version,
+      source: "system",
+      organizationId: orgB.id,
+      assigneeMemberId: bobMemberId,
+    });
+    expect(patched.status).toBe(404); // foreign assignee refused before any write
+    const ok = await hugo.patch(api(`/tasks/${taskId}`), { title: "Renommée", version, source: "system" });
+    expect(ok.status).toBe(200);
+    expect((ok.json as { data: { source: string; title: string } }).data).toMatchObject({
+      source: "manual",
+      title: "Renommée",
+    });
+    expect((await hugo.post(api(`/tasks/${taskId}/complete`), {})).status).toBe(200);
+    expect((await hugo.post(api(`/tasks/${taskId}/explode`), {})).status).toBe(404);
+    expect((await ines.get(api("/tasks/export"))).status).toBe(200);
+    expect((await carol.get(api("/tasks/export"))).status).toBe(403);
+    expect((await hugo.delete(api(`/tasks/${taskId}`))).status).toBe(204);
+    expect((await hugo.get(api(`/tasks/${taskId}`))).status).toBe(404);
+  });
+
+  it("notifications: every active member reads only their own rows; preferences are per member and validated", async () => {
+    expect((await carol.get(api("/notifications"))).status).toBe(403);
+    expect((await carol.post(api("/notifications/read"), { all: true })).status).toBe(403);
+    const mine = await hugo.get(api("/notifications?unread=true"));
+    expect(mine.status).toBe(200);
+    // Forged ids never touch anyone's rows (0 updated, no error).
+    const forged = await hugo.post(api("/notifications/read"), { ids: [randomUUID()] });
+    expect(forged.status).toBe(200);
+    expect((forged.json as { data: { updated: number } }).data.updated).toBe(0);
+    expect((await hugo.post(api("/notifications/read"), { ids: [] })).status).toBe(422);
+    expect((await hugo.post(api("/notifications/read"), { ids: ["not-a-uuid"] })).status).toBe(422);
+    expect(
+      (await hugo.put(api("/notification-preferences"), { preferences: [{ kind: "evil.kind", inApp: false }] })).status,
+    ).toBe(422);
+    const set = await hugo.put(api("/notification-preferences"), {
+      preferences: [{ kind: "campaign.finished", inApp: false }],
+    });
+    expect(set.status).toBe(200);
+    const prefs = (set.json as { data: { preferences: Array<{ kind: string; inApp: boolean }> } }).data.preferences;
+    expect(prefs.find((p) => p.kind === "campaign.finished")?.inApp).toBe(false);
+    // Ines' preferences are untouched by Hugo's change.
+    const ines1 = await ines.get(api("/notification-preferences"));
+    expect(
+      (ines1.json as { data: { preferences: Array<{ kind: string; inApp: boolean }> } }).data.preferences.every(
+        (p) => p.inApp,
+      ),
+    ).toBe(true);
+    expect((await carol.put(api("/notification-preferences"), { preferences: prefs })).status).toBe(403);
+  });
+});

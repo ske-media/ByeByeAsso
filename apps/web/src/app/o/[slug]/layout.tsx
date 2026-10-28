@@ -1,3 +1,4 @@
+import { unreadCount } from "@kroov/domain/notifications";
 import { listInvitations } from "@kroov/domain/organizations";
 import type { ReactNode } from "react";
 import { db } from "@/lib/db";
@@ -14,9 +15,14 @@ export default async function OrganizationLayout({
   const { slug } = await params;
   const ctx = await loadOrgPage(slug, `/o/${slug}`);
   const canInvite = ctx.can("members.invite");
-  const pending = canInvite
-    ? (await listInvitations(db(), ctx.session.actor, ctx.organization.id)).filter((i) => i.status === "pending").length
-    : 0;
+  const [pending, unread] = await Promise.all([
+    canInvite
+      ? listInvitations(db(), ctx.session.actor, ctx.organization.id).then(
+          (l) => l.filter((i) => i.status === "pending").length,
+        )
+      : Promise.resolve(0),
+    unreadCount(db(), ctx.session.actor, ctx.organization.id),
+  ]);
 
   return (
     <OrgShell
@@ -37,10 +43,13 @@ export default async function OrganizationLayout({
           [...ctx.member.eventPermissions.values()].some((p) => p.has("volunteers.review")),
         contacts: ctx.can("contacts.read"),
         marketing: ctx.can("campaigns.manage"),
+        finances: ctx.can("analytics.read"),
+        tasks: ctx.can("organization.read"),
         team: ctx.can("organization.read"),
         settings: ctx.can("organization.manage"),
       }}
       pendingInvitations={pending}
+      unreadNotifications={unread}
     >
       {children}
     </OrgShell>

@@ -3,6 +3,7 @@ import { loadServerEnv } from "@kroov/config/env";
 import { createDatabase } from "@kroov/database";
 import { config as loadDotenv } from "dotenv";
 import pino from "pino";
+import { registerDomainEventConsumer } from "./jobs/domain-events";
 import { registerEventJobs } from "./jobs/events";
 import { registerMaintenanceJobs } from "./jobs/maintenance";
 import { registerMarketingJobs } from "./jobs/marketing";
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
 
   const queue = await createQueue({ connectionString: env.DATABASE_URL, logger });
 
+  await registerDomainEventConsumer({ queue, db: database.db, logger });
   await registerOutboxRelay({ queue, db: database.db, logger });
   await registerMaintenanceJobs({ queue, db: database.db, logger });
   await registerEventJobs({ queue, db: database.db, logger });

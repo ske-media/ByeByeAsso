@@ -86,6 +86,8 @@ export const outboxEvents = pgTable(
     organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
     status: outboxStatus("status").notNull().default("pending"),
     attempts: integer("attempts").notNull().default(0),
+    /** Times a `failed` row was put back to `pending` by the bounded requeue job (phase 9). */
+    requeueCount: integer("requeue_count").notNull().default(0),
     lastError: text("last_error"),
     availableAt: timestamp("available_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true, mode: "date" }),
@@ -95,6 +97,7 @@ export const outboxEvents = pgTable(
     index("outbox_events_pending_idx").on(t.availableAt).where(sql`${t.status} = 'pending'`),
     index("outbox_events_aggregate_idx").on(t.aggregateType, t.aggregateId),
     check("outbox_events_attempts_nonneg", sql`${t.attempts} >= 0`),
+    check("outbox_events_requeue_nonneg", sql`${t.requeueCount} >= 0`),
   ],
 );
 

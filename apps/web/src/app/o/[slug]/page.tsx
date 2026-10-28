@@ -1,19 +1,23 @@
+import { organizationDashboard } from "@kroov/domain/analytics";
 import { EVENT_STATUS_LABELS, listEvents } from "@kroov/domain/events";
 import { formatDateFr, formatRangeFr } from "@kroov/domain/kernel";
+import { listNotifications } from "@kroov/domain/notifications";
 import { listInvitations, listMembers } from "@kroov/domain/organizations";
+import { listTasks } from "@kroov/domain/tasks";
 import { Alert, Badge, Button, EventPoster, PageHeader, Panel, PanelTitle, Stat, StatGrid } from "@kroov/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { roleLabel } from "@/lib/labels";
+import { fmtMinor } from "@/lib/money";
 import { loadOrgPage } from "@/lib/org-context";
 
 export const metadata: Metadata = { title: "Vue d'ensemble" };
 
 /**
  * Écran 03 — Vue d'ensemble, construite uniquement sur l'état réel : prochain événement,
- * compteurs d'événements, équipe, invitations. Les indicateurs de billetterie, bénévoles
- * et adhésions apparaîtront avec leurs phases (jamais un faux « 0 »).
+ * KPI calculés sur les enregistrements autoritaires (analytics.read), tâches en retard,
+ * notifications non lues, équipe, invitations. Jamais un faux « 0 » : sans accès, « — ».
  */
 export default async function OverviewPage({
   params,
@@ -29,13 +33,20 @@ export default async function OverviewPage({
   const canInvite = ctx.can("members.invite");
   const canReadEvents = ctx.can("events.read") || ctx.member.eventPermissions.size > 0;
   const canCreate = ctx.can("events.create");
-  const [members, invitations, events] = await Promise.all([
+  const canAnalytics = ctx.can("analytics.read");
+  const [members, invitations, events, dashboard, tasks, notifications] = await Promise.all([
     canReadOrg ? listMembers(db(), ctx.session.actor, ctx.organization.id) : Promise.resolve(null),
     canInvite ? listInvitations(db(), ctx.session.actor, ctx.organization.id) : Promise.resolve(null),
     canReadEvents
       ? listEvents(db(), ctx.session.actor, ctx.organization.id, { status: "active" })
       : Promise.resolve(null),
+    canAnalytics ? organizationDashboard(db(), ctx.session.actor, ctx.organization.id) : Promise.resolve(null),
+    canReadOrg
+      ? listTasks(db(), ctx.session.actor, ctx.organization.id, { status: "open", pageSize: 6 })
+      : Promise.resolve(null),
+    listNotifications(db(), ctx.session.actor, ctx.organization.id, { unread: true, limit: 5 }),
   ]);
+  const overdueTasks = tasks?.items.filter((t) => t.overdue) ?? [];
   const pending = invitations?.filter((i) => i.status === "pending").length ?? 0;
   const now = Date.now();
   const published = events?.filter((e) => e.status === "published") ?? [];
@@ -87,19 +98,60 @@ export default async function OverviewPage({
         />
         <Stat
           tone="pink"
-          label="Équipe"
-          value={members ? String(members.length) : "—"}
+          label="Billets vendus"
+          value={dashboard ? String(dashboard.ticketing.ticketsSold) : "—"}
           hint={
-            members
-              ? `${members.length > 1 ? "personnes" : "personne"} avec un accès`
-              : "Lecture réservée aux rôles d'organisation"
+            dashboard
+              ? `${dashboard.ticketing.paidOrders} commande(s) payée(s) · ${dashboard.ticketing.ticketsUsed} utilisé(s)`
+              : "Droit « consulter les statistiques » requis"
           }
         />
         <Stat
           tone="lavender"
-          label="Invitations en attente"
-          value={invitations ? String(pending) : "—"}
-          hint={invitations ? "Valables 7 jours" : "Réservé aux personnes habilitées"}
+          label="Brut billetterie"
+          value={dashboard ? fmtMinor(dashboard.ticketing.gross.amountMinor, dashboard.currency) : "—"}
+          hint={
+            dashboard
+              ? `${fmtMinor(dashboard.ticketing.refunds.amountMinor, dashboard.currency)} remboursé(s) · grand livre`
+              : "Droit « consulter les statistiques » requis"
+          }
+        />
+        <Stat
+          label="Adhérents actifs"
+          value={dashboard ? String(dashboard.memberships.active) : "—"}
+          hint={
+            dashboard
+              ? `${dashboard.memberships.pending} en attente · ${dashboard.memberships.expiringIn30Days} expirent sous 30 j`
+              : "Droit « consulter les statistiques » requis"
+          }
+        />
+        <Stat
+          tone="orange"
+          label="Bénévoles"
+          value={dashboard ? String(dashboard.volunteers.applications) : "—"}
+          hint={
+            dashboard
+              ? `${dashboard.volunteers.approved} acceptée(s) · couverture ${dashboard.volunteers.coverageRate === null ? "—" : `${Math.round(dashboard.volunteers.coverageRate * 100)} %`}`
+              : "Droit « consulter les statistiques » requis"
+          }
+        />
+        <Stat
+          label="Tâches en retard"
+          value={tasks ? String(tasks.counts.overdue) : "—"}
+          hint={
+            tasks
+              ? `${tasks.counts.open} ouverte(s) · ${tasks.counts.mine} à moi`
+              : "Lecture réservée aux rôles d'organisation"
+          }
+        />
+        <Stat
+          label="Équipe"
+          value={members ? String(members.length) : "—"}
+          hint={
+            members
+              ? `${members.length > 1 ? "personnes" : "personne"} avec un accès${invitations ? ` · ${pending} invitation(s)` : ""}`
+              : "Lecture réservée aux rôles d'organisation"
+          }
         />
         <Stat
           label="Vos rôles"
@@ -191,6 +243,31 @@ export default async function OverviewPage({
                 </span>
               </li>
             ) : null}
+            {overdueTasks.map((t) => (
+              <li key={t.id} className="flex items-center justify-between gap-3 py-3">
+                <span>
+                  <b>{t.title}</b>
+                  <span className="block text-error-text">
+                    En retard · {t.dueAt?.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                    {t.assignee ? ` · ${t.assignee.name}` : ""}
+                  </span>
+                </span>
+                <Link href={`/o/${slug}/taches?filtre=overdue`} aria-label="Voir les tâches en retard">
+                  →
+                </Link>
+              </li>
+            ))}
+            {notifications.items.map((n) => (
+              <li key={n.id} className="flex items-center justify-between gap-3 py-3">
+                <span>
+                  <b>{n.title}</b>
+                  {n.body ? <span className="block text-muted">{n.body}</span> : null}
+                </span>
+                <Link href={n.href ?? `/o/${slug}/notifications`} aria-label={`Ouvrir : ${n.title}`}>
+                  →
+                </Link>
+              </li>
+            ))}
             {drafts.length > 0 ? (
               <li className="flex items-center justify-between gap-3 py-3">
                 <span>
@@ -224,12 +301,32 @@ export default async function OverviewPage({
                 </Link>
               </li>
             ) : null}
-            {!fresh && drafts.length === 0 && pending === 0 && !(members && members.length <= 1 && canInvite) ? (
-              <li className="py-3 text-muted">
-                Rien d'urgent. Les tâches billetterie et bénévoles arriveront avec les prochains modules.
-              </li>
+            {!fresh &&
+            drafts.length === 0 &&
+            pending === 0 &&
+            overdueTasks.length === 0 &&
+            notifications.items.length === 0 &&
+            !(members && members.length <= 1 && canInvite) ? (
+              <li className="py-3 text-muted">Rien d'urgent. Aucune tâche en retard, aucune notification non lue.</li>
             ) : null}
           </ul>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {tasks ? (
+              <Button asChild size="sm" variant="ghost">
+                <Link href={`/o/${slug}/taches`}>Toutes les tâches ({tasks.counts.open})</Link>
+              </Button>
+            ) : null}
+            <Button asChild size="sm" variant="ghost">
+              <Link href={`/o/${slug}/notifications`}>
+                Notifications{notifications.unreadCount > 0 ? ` (${notifications.unreadCount} non lue(s))` : ""}
+              </Link>
+            </Button>
+            {canAnalytics ? (
+              <Button asChild size="sm" variant="ghost">
+                <Link href={`/o/${slug}/finances`}>Finances</Link>
+              </Button>
+            ) : null}
+          </div>
           <div className="mt-4 rounded-[9px] bg-orange px-4 py-3 text-[12px]">
             <b>Organisation</b>
             <span className="block">

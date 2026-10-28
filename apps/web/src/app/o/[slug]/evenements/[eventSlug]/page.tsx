@@ -1,5 +1,7 @@
+import { eventDashboard } from "@kroov/domain/analytics";
 import { EVENT_STATUS_LABELS, getEventBySlug, publicationChecklist } from "@kroov/domain/events";
 import { formatDateFr, formatRangeFr, NotFoundError } from "@kroov/domain/kernel";
+import { listAssignableMembers, listTasks } from "@kroov/domain/tasks";
 import { getTicketingSettings, ticketingStats } from "@kroov/domain/ticketing";
 import { applicationStats, getVolunteering } from "@kroov/domain/volunteers";
 import { Alert, Badge, Button, EventPoster, PageHeader, Panel, PanelTitle, Stat, StatGrid } from "@kroov/ui";
@@ -10,6 +12,8 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { fmtMinor } from "@/lib/money";
 import { loadOrgPage } from "@/lib/org-context";
+import { toTaskRow } from "@/lib/tasks";
+import { NewTaskButton, type TaskCtx, TaskList } from "../../taches/tasks-panel";
 import { CopyLink, EventLifecycleActions } from "./actions-panel";
 
 export const metadata: Metadata = { title: "Piloter l'événement" };
@@ -33,7 +37,10 @@ export default async function EventPilotPage({
     throw error;
   }
   const can = (p: Parameters<typeof ctx.can>[0]) => ctx.can(p, event.id);
-  const [stats, ticketing, volunteering, volunteerStats] = await Promise.all([
+  const canAnalytics = ctx.can("analytics.read") || can("events.read");
+  const canReadOrg = ctx.can("organization.read");
+  const canManageTasks = ctx.can("tasks.manage");
+  const [stats, ticketing, volunteering, volunteerStats, dashboard, tasks, members] = await Promise.all([
     can("orders.read") ? ticketingStats(db(), ctx.session.actor, ctx.organization.id, event.id) : Promise.resolve(null),
     getTicketingSettings(db(), ctx.session.actor, ctx.organization.id, event.id),
     can("volunteers.review")
@@ -42,7 +49,24 @@ export default async function EventPilotPage({
     can("volunteers.review")
       ? applicationStats(db(), ctx.session.actor, ctx.organization.id, event.id)
       : Promise.resolve(null),
+    canAnalytics ? eventDashboard(db(), ctx.session.actor, ctx.organization.id, event.id) : Promise.resolve(null),
+    canReadOrg
+      ? listTasks(db(), ctx.session.actor, ctx.organization.id, { status: "open", eventId: event.id, pageSize: 20 })
+      : Promise.resolve(null),
+    canManageTasks ? listAssignableMembers(db(), ctx.session.actor, ctx.organization.id) : Promise.resolve([]),
   ]);
+  const taskCtx: TaskCtx | null = tasks
+    ? {
+        organizationId: ctx.organization.id,
+        slug,
+        canManage: canManageTasks,
+        members: members.map((m) => ({ memberId: m.memberId, name: m.name })),
+        events: [{ id: event.id, title: event.title, slug: event.slug }],
+        eventId: event.id,
+        eventSlug: event.slug,
+      }
+    : null;
+  const pct = (v: number | null) => (v === null ? "—" : `${Math.round(v * 100)} %`);
   const checklist = publicationChecklist(event);
   const missing = checklist.filter((c) => !c.ok);
   const publicUrl = `${env().APP_URL}/${ctx.organization.slug}/${event.slug}`;
@@ -246,6 +270,90 @@ export default async function EventPilotPage({
               </ul>
             </Panel>
           )}
+
+          {dashboard ? (
+            <Panel>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                <PanelTitle className="mb-0">Chiffres</PanelTitle>
+                <Button asChild size="sm" variant="secondary">
+                  <a href={`/api/v1/organizations/${ctx.organization.id}/events/${event.id}/report/export`}>
+                    Rapport (CSV)
+                  </a>
+                </Button>
+              </div>
+              <StatGrid className="sm:grid-cols-3 xl:grid-cols-3">
+                <Stat
+                  tone="lime"
+                  label="Remplissage"
+                  value={pct(dashboard.ticketing.occupancyRate)}
+                  hint={`${dashboard.ticketing.ticketsSold} billet(s) sur ${dashboard.capacity} place(s)`}
+                />
+                <Stat
+                  tone="pink"
+                  label="Brut billetterie"
+                  value={fmtMinor(dashboard.ticketing.gross.amountMinor, dashboard.currency)}
+                  hint={`${fmtMinor(dashboard.ticketing.refunds.amountMinor, dashboard.currency)} remboursé(s) · ${dashboard.ticketing.paidOrders} commande(s)`}
+                />
+                <Stat
+                  tone="lavender"
+                  label="Net estimé"
+                  value={fmtMinor(dashboard.ticketing.netEstimate.amountMinor, dashboard.currency)}
+                  hint="hors frais du prestataire et versements"
+                />
+                <Stat
+                  label="Contrôles d'accès"
+                  value={String(dashboard.checkins.accepted)}
+                  hint={`${dashboard.checkins.refused} refusé(s) · ${dashboard.checkins.alreadyUsed} déjà utilisé(s)`}
+                />
+                <Stat
+                  tone="orange"
+                  label="Couverture bénévole"
+                  value={pct(dashboard.volunteers.coverageRate)}
+                  hint={
+                    dashboard.volunteers.publishedVersion
+                      ? `${dashboard.volunteers.shiftsCovered}/${dashboard.volunteers.shiftsRequired} places · ${dashboard.volunteers.unfilledShifts.length} créneau(x) non pourvu(s)`
+                      : "Aucune version publiée du planning"
+                  }
+                />
+                <Stat
+                  label="Attribué aux campagnes"
+                  value={String(dashboard.campaigns.attributedPaidOrders)}
+                  hint={`commande(s) payée(s) · ${fmtMinor(dashboard.campaigns.attributedRevenue.amountMinor, dashboard.currency)}`}
+                />
+              </StatGrid>
+              {dashboard.ticketing.byType.length > 0 ? (
+                <ul className="mt-3 m-0 list-none divide-y divide-border p-0 text-[13px]">
+                  {dashboard.ticketing.byType.map((t) => (
+                    <li key={t.name} className="flex items-center justify-between gap-3 py-2">
+                      <span>{t.name}</span>
+                      <span className="k-tabular text-muted">
+                        {t.sold}
+                        {t.quota !== null ? ` / ${t.quota}` : ""} · {fmtMinor(t.grossMinor, dashboard.currency)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <p className="mt-3 text-[12px] text-muted">
+                Sources : billets, commandes, contrôles, grand livre, planning publié, attribution des commandes. Aucune
+                valeur estimée hors « net estimé ».
+              </p>
+            </Panel>
+          ) : null}
+
+          {taskCtx && tasks ? (
+            <Panel>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                <PanelTitle className="mb-0">Tâches ({tasks.counts.open > 0 ? tasks.items.length : 0})</PanelTitle>
+                <NewTaskButton ctx={taskCtx} label="+ Tâche" />
+              </div>
+              <TaskList
+                ctx={taskCtx}
+                tasks={tasks.items.map(toTaskRow)}
+                emptyTitle="Aucune tâche ouverte pour cet événement"
+              />
+            </Panel>
+          ) : null}
         </div>
 
         <div className="space-y-5">
