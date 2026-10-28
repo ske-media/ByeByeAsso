@@ -4,7 +4,7 @@
 
 Système d'exploitation événementiel multi-organisations (billetterie native, adhésions, bénévoles et planning intelligent, CRM, marketing). Marché initial : France.
 
-État : **Phase 1 — identité et organisations** validée (`docs/phase-1-report.md`, après `docs/phase-0-report.md`). API : `docs/openapi.yaml`.
+État : **Phase 10 — durcissement de production** validée (`docs/phase-10-report.md` ; rapports de chaque phase dans `docs/`). API : `docs/openapi.yaml`. Déploiement : `docs/deployment.md`, `docs/production-checklist.md`, menaces : `docs/threat-model.md`.
 
 ## Prérequis
 
@@ -33,21 +33,23 @@ Pages utiles en développement :
 
 ## Commandes
 
-| Commande                      | Rôle                                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `pnpm lint` / `pnpm lint:fix` | Biome (lint + format)                                                                                     |
-| `pnpm typecheck`              | `tsc --noEmit` sur chaque workspace                                                                       |
-| `pnpm test:unit`              | tests unitaires (packages, apps)                                                                          |
-| `pnpm test:integration`       | tests sur PostgreSQL réel (`DATABASE_URL_TEST`)                                                           |
-| `pnpm test:security`          | tests négatifs ; avec `E2E_BASE_URL` : isolation tenant par API directe (voir `tests/security/README.md`) |
-| `pnpm test:e2e`               | Playwright (desktop 1440 px, mobile 390 px) ; `E2E_BASE_URL` pour cibler un serveur déjà lancé            |
-| `pnpm build`                  | build de production (Next.js + typecheck worker)                                                          |
-| `pnpm validate`               | lint + typecheck + unit + build                                                                           |
-| `pnpm db:generate`            | génère une migration SQL depuis le schéma Drizzle                                                         |
-| `pnpm db:migrate`             | applique les migrations                                                                                   |
-| `pnpm db:check`               | vérifie la cohérence schéma / migrations                                                                  |
-| `pnpm db:reset`               | **dev uniquement** : recrée la base locale et migre                                                       |
-| `pnpm secrets:scan`           | recherche de secrets commités                                                                             |
+| Commande                      | Rôle                                                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `pnpm lint` / `pnpm lint:fix` | Biome (lint + format)                                                                                            |
+| `pnpm typecheck`              | `tsc --noEmit` sur chaque workspace                                                                              |
+| `pnpm test:unit`              | tests unitaires (packages, apps)                                                                                 |
+| `pnpm test:integration`       | tests sur PostgreSQL réel (`DATABASE_URL_TEST`)                                                                  |
+| `pnpm test:security`          | tests négatifs ; avec `E2E_BASE_URL` : isolation tenant par API directe (voir `tests/security/README.md`)        |
+| `pnpm test:e2e`               | Playwright (desktop 1440 px, mobile 390 px) ; `E2E_BASE_URL` pour cibler un serveur déjà lancé                   |
+| `pnpm build`                  | build de production (Next.js + typecheck worker)                                                                 |
+| `pnpm validate`               | lint + typecheck + unit + build                                                                                  |
+| `pnpm db:generate`            | génère une migration SQL depuis le schéma Drizzle                                                                |
+| `pnpm db:migrate`             | applique les migrations                                                                                          |
+| `pnpm db:check`               | vérifie la cohérence schéma / migrations                                                                         |
+| `pnpm db:reset`               | **dev uniquement** : recrée la base locale et migre                                                              |
+| `pnpm secrets:scan`           | recherche de secrets commités                                                                                    |
+| `scripts/backup.sh [dir]`     | sauvegarde `pg_dump` (format custom) + empreinte ; `scripts/restore.sh <dump> <url>` restaure dans une base vide |
+| `scripts/load-test.mjs`       | test de charge local (autocannon) sur les surfaces publiques                                                     |
 
 ## Structure
 

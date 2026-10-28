@@ -72,6 +72,17 @@ export const serverEnvSchema = z.object({
 
   // Worker.
   WORKER_CONCURRENCY: z.coerce.number().int().positive().max(64).default(4),
+
+  // Hardening (phase 10)
+  /** Trust `x-forwarded-for` (first address) as the client address — ONLY behind the declared reverse proxy. */
+  TRUST_PROXY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  /** Bearer token protecting GET /api/v1/metrics (unset = endpoint disabled). */
+  METRICS_TOKEN: z.string().min(16).optional(),
+  /** Multiplier applied to every public rate limit (1 = defaults; tests may raise it). */
+  RATE_LIMIT_FACTOR: z.coerce.number().min(0.01).max(1000).default(1),
 });
 
 export type ServerEnv = Omit<z.infer<typeof serverEnvSchema>, "APP_ENV"> & { APP_ENV: AppEnv };
@@ -80,6 +91,30 @@ export type AppEnv = z.infer<typeof appEnv>;
 function resolveAppEnv(parsed: z.infer<typeof serverEnvSchema>): ServerEnv {
   const APP_ENV: AppEnv = parsed.APP_ENV ?? (parsed.NODE_ENV === "production" ? "production" : parsed.NODE_ENV);
   return { ...parsed, APP_ENV };
+}
+
+/**
+ * Production / staging guards (phase 10): a deployment that could leak or fake something fails
+ * at startup with every issue listed, instead of running with development defaults.
+ */
+export function productionIssues(env: ServerEnv): string[] {
+  if (env.APP_ENV !== "production" && env.APP_ENV !== "staging") return [];
+  const issues: string[] = [];
+  if (!env.AUTH_SECRET) issues.push("AUTH_SECRET: requis en production (dérivation des jetons, sessions)");
+  if (!env.APP_URL.startsWith("https://")) issues.push("APP_URL: doit être en https en production");
+  if (env.PAYMENT_PROVIDER === "fake")
+    issues.push("PAYMENT_PROVIDER: le prestataire simulé est interdit en production");
+  if (env.PAYMENT_PROVIDER === "stripe" && (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET))
+    issues.push("STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET: requis avec PAYMENT_PROVIDER=stripe");
+  if (env.EMAIL_PROVIDER === "console" || env.EMAIL_PROVIDER === "file")
+    issues.push("EMAIL_PROVIDER: console/file sont réservés au développement et aux tests");
+  if (env.EMAIL_PROVIDER === "resend" && !env.RESEND_API_KEY)
+    issues.push("RESEND_API_KEY: requis avec EMAIL_PROVIDER=resend");
+  if (env.EMAIL_PROVIDER === "smtp" && !env.SMTP_URL) issues.push("SMTP_URL: requis avec EMAIL_PROVIDER=smtp");
+  if (env.EMAIL_WEBHOOK_SECRET === "fake-email-webhook-secret-local-only")
+    issues.push("EMAIL_WEBHOOK_SECRET: la valeur par défaut de développement est interdite en production");
+  if (env.DATABASE_URL.includes("kroov:kroov@")) issues.push("DATABASE_URL: identifiants de développement détectés");
+  return issues;
 }
 
 export const publicEnvSchema = z.object({
@@ -120,7 +155,10 @@ export function loadServerEnv(source: NodeJS.ProcessEnv = process.env): ServerEn
   if (!result.success) {
     throw new EnvValidationError(formatIssues(result.error));
   }
-  return resolveAppEnv(result.data);
+  const env = resolveAppEnv(result.data);
+  const issues = productionIssues(env);
+  if (issues.length > 0) throw new EnvValidationError(issues);
+  return env;
 }
 
 export function loadPublicEnv(source: NodeJS.ProcessEnv = process.env): PublicEnv {

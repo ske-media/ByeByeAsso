@@ -19,7 +19,8 @@ export function UserMenu({ name }: { name: string }) {
 
   return (
     <div className="flex items-center gap-3 text-[12px]">
-      <Link href="/moi" className="flex items-center gap-2 rounded-control" aria-label={`Mon compte : ${name}`}>
+      <Link href="/moi" className="flex items-center gap-2 rounded-control">
+        <span className="k-sr-only">Mon compte : </span>
         <span
           aria-hidden="true"
           className="flex size-8 items-center justify-center rounded-full bg-lavender text-[11px] font-bold"
@@ -27,6 +28,7 @@ export function UserMenu({ name }: { name: string }) {
           {initials}
         </span>
         <span className="hidden font-bold sm:inline">{name}</span>
+        <span className="k-sr-only sm:hidden">{name}</span>
       </Link>
       <Button
         variant="ghost"

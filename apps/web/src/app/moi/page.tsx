@@ -1,4 +1,5 @@
 import { getProfile } from "@kroov/domain/identity";
+import { lastOwnerOrganizations } from "@kroov/domain/privacy";
 import { Badge, Panel, PanelTitle } from "@kroov/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -7,13 +8,17 @@ import { db } from "@/lib/db";
 import { requireSession } from "@/lib/session";
 import { UserMenu } from "../o/[slug]/user-menu";
 import { PasswordForm, ProfileForm } from "./forms";
+import { PrivacyPanel } from "./privacy-panel";
 
 export const metadata: Metadata = { title: "Mon compte" };
 
 /** Écran 45 — Profil et préférences. */
 export default async function ProfilePage() {
   const session = await requireSession("/moi", { requireVerified: false });
-  const profile = await getProfile(db(), session.actor);
+  const [profile, lastOwnerOf] = await Promise.all([
+    getProfile(db(), session.actor),
+    lastOwnerOrganizations(db(), session.actor),
+  ]);
 
   return (
     <AppPublicShell
@@ -65,9 +70,14 @@ export default async function ProfilePage() {
         <Panel className="bg-lavender">
           <PanelTitle>Préférences de communication</PanelTitle>
           <p className="text-[13px]">
-            Les préférences de notification (billets, missions, campagnes) seront proposées avec les modules
-            correspondants. Aucun message marketing ne vous est envoyé sans votre accord explicite.
+            Les notifications internes se règlent dans chaque organisation (page Notifications). Aucun message marketing
+            ne vous est envoyé sans votre accord explicite ; chaque e-mail de campagne contient un lien de
+            désinscription.
           </p>
+        </Panel>
+        <Panel>
+          <PanelTitle>Mes données</PanelTitle>
+          <PrivacyPanel email={profile.email} lastOwnerOf={lastOwnerOf.map((o) => ({ name: o.name, slug: o.slug }))} />
         </Panel>
       </div>
     </AppPublicShell>

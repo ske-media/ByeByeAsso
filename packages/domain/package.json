@@ -20,6 +20,8 @@
     "./analytics": "./src/analytics/index.ts",
     "./tasks": "./src/tasks/index.ts",
     "./notifications": "./src/notifications/index.ts",
+    "./privacy": "./src/privacy/index.ts",
+    "./platform": "./src/platform/index.ts",
     "./billing": "./src/billing/index.ts",
     "./audit": "./src/audit/index.ts",
     "./authorization": "./src/authorization/index.ts",

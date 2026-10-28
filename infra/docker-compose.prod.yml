@@ -1,0 +1,31 @@
+# Production-like composition (single host). PostgreSQL is expected to be managed (Supabase,
+# RDS…) in real production; the local service below is for staging / rehearsal only.
+#   docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --build
+name: kroov-prod
+
+services:
+  migrate:
+    build: { context: .., dockerfile: infra/docker/worker.Dockerfile }
+    command: ["pnpm", "db:migrate"]
+    env_file: [../.env]
+    restart: "no"
+
+  web:
+    build: { context: .., dockerfile: infra/docker/web.Dockerfile }
+    env_file: [../.env]
+    environment:
+      APP_ENV: production
+      TRUST_PROXY: "true"
+    ports: ["3000:3000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    build: { context: .., dockerfile: infra/docker/worker.Dockerfile }
+    env_file: [../.env]
+    environment:
+      APP_ENV: production
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped

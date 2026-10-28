@@ -69,3 +69,46 @@ export async function updateProfile(db: DbExecutor, actor: Actor, input: UpdateP
   }
   return getProfile(db, actor);
 }
+
+/* ------------------------------------------------------------------------- */
+/* account deletion (phase 10) — identity part                               */
+/* ------------------------------------------------------------------------- */
+
+export interface AnonymisationTarget {
+  userId: string;
+  /** The e-mail the person signed in with (lower-cased), matched on records without user_id. */
+  email: string;
+  /** Technical, unique, undeliverable replacement address. */
+  replacementEmail: string;
+}
+
+export function replacementEmailFor(userId: string): string {
+  return `deleted-${userId}@anonymised.kroov.invalid`;
+}
+
+/**
+ * Replaces the identity of a user: name, e-mail, image, phone; deletes sessions and sign-in
+ * accounts (no credential survives, no new session can be opened); closes every organization
+ * membership (roles stop applying). Audit rows keep the opaque user id. Caller must have
+ * checked the last-owner rule first.
+ */
+export async function anonymiseUserIdentity(db: DbExecutor, target: AnonymisationTarget, now = new Date()) {
+  await db
+    .update(schema.users)
+    .set({
+      name: "Compte supprimé",
+      email: target.replacementEmail,
+      emailVerified: false,
+      image: null,
+      deletedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(schema.users.id, target.userId));
+  await db.update(schema.userProfiles).set({ phone: null }).where(eq(schema.userProfiles.userId, target.userId));
+  await db.delete(schema.sessions).where(eq(schema.sessions.userId, target.userId));
+  await db.delete(schema.accounts).where(eq(schema.accounts.userId, target.userId));
+  await db
+    .update(schema.organizationMembers)
+    .set({ status: "removed", removedAt: now, updatedAt: now })
+    .where(eq(schema.organizationMembers.userId, target.userId));
+}

@@ -1748,3 +1748,113 @@ describeLive("S11. operations — analytics and finances bounded, tasks tenant-s
     expect((await carol.put(api("/notification-preferences"), { preferences: prefs })).status).toBe(403);
   });
 });
+
+describeLive("S12. hardening — rate limits, headers, metrics, account deletion", () => {
+  it("public endpoints are rate limited per client (429 + Retry-After) while other scopes stay open", async () => {
+    // Unsubscribe with a forged reference answers 404 until the limit (30/min) is reached.
+    let limited: Response | null = null;
+    for (let i = 0; i < 40; i += 1) {
+      const r = await fetch(`${baseUrl}/api/v1/public/unsubscribe/forged.ref.${run}`, { method: "POST" });
+      if (r.status === 429) {
+        limited = r;
+        break;
+      }
+      expect(r.status).toBe(404);
+    }
+    expect(limited).not.toBeNull();
+    expect(Number(limited!.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    expect(limited!.headers.get("ratelimit-limit")).toBe("30");
+    const body = (await limited!.json()) as { error: { code: string; details: { retryAfterSeconds: number } } };
+    expect(body.error.code).toBe("rate_limited");
+    expect(body.error.details.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+    // A different scope from the same client is not affected.
+    expect((await fetch(`${baseUrl}/l/not-a-real-token-at-all`, { redirect: "manual" })).status).toBe(404);
+    expect((await alice.get(`/api/v1/organizations/${orgA.id}`)).status).toBe(200);
+  });
+
+  it("security headers and request ids are present on every response", async () => {
+    const page = await fetch(`${baseUrl}/connexion`);
+    expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(page.headers.get("x-frame-options")).toBe("DENY");
+    expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+    const api = await fetch(`${baseUrl}/api/v1/health`);
+    expect(api.status).toBe(200);
+    const echoed = await alice.request("GET", "/api/v1/organizations", undefined, {
+      headers: { "x-request-id": `sec-${run}-abcdef` },
+    });
+    expect(echoed.response.headers.get("x-request-id")).toBe(`sec-${run}-abcdef`);
+    const generated = await alice.get("/api/v1/organizations");
+    expect(generated.response.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
+    // Health never leaks personal data and reports the worker.
+    const health = (await api.json()) as { status: string; checks: { worker: { alive: boolean }; outbox: unknown } };
+    expect(["ok", "degraded"]).toContain(health.status);
+    expect(typeof health.checks.worker.alive).toBe("boolean");
+  });
+
+  it("metrics are disabled without a configured token or refused without the right bearer", async () => {
+    const r = await fetch(`${baseUrl}/api/v1/metrics`);
+    expect([401, 404]).toContain(r.status);
+    const forged = await fetch(`${baseUrl}/api/v1/metrics`, { headers: { authorization: "Bearer not-the-token" } });
+    expect([401, 404]).toContain(forged.status);
+  });
+
+  it("account deletion: last owner refused, wrong e-mail refused, then anonymised and signed out", async () => {
+    const gina = await signedInClient(baseUrl!, outbox, {
+      name: "Gina G",
+      email: `gina-${run}@sec.kroov.local`,
+      password,
+    });
+    const own = await gina.post("/api/v1/organizations", { name: `Org G ${run}`, slug: `org-g-${run}` });
+    expect(own.status).toBe(201);
+    const orgG = (own.json as { data: { id: string } }).data.id;
+    // Export works and is bounded to Gina.
+    const exported = await gina.get("/api/v1/profiles/me/export");
+    expect(exported.status).toBe(200);
+    expect(exported.response.headers.get("content-disposition")).toContain("kroov-mes-donnees-");
+    const data = exported.json as { profile: { email: string }; organizations: Array<{ id: string }> };
+    expect(data.profile.email).toBe(`gina-${run}@sec.kroov.local`);
+    expect(data.organizations.map((o) => o.id)).toEqual([orgG]);
+    expect((await carol.get("/api/v1/profiles/me/export")).status).toBe(200);
+    expect((await new ApiClient(baseUrl!).get("/api/v1/profiles/me/export")).status).toBe(401);
+    // Last owner → 412 with the organizations named.
+    const refused = await gina.post("/api/v1/profiles/me/delete", { confirmEmail: `gina-${run}@sec.kroov.local` });
+    expect(refused.status).toBe(412);
+    expect(
+      (refused.json as { error: { details: { code: string; organizations: Array<{ id: string }> } } }).error.details,
+    ).toMatchObject({
+      code: "last_owner",
+      organizations: [{ id: orgG }],
+    });
+    // Hand the organization over to Alice (owner), then retry.
+    expect(
+      (
+        await gina.post(`/api/v1/organizations/${orgG}/invitations`, {
+          email: `alice-${run}@sec.kroov.local`,
+          role: "owner",
+        })
+      ).status,
+    ).toBe(201);
+    const link = lastEmailLink(outbox, `alice-${run}@sec.kroov.local`, /https?:\/\/\S+\/invitation\/[A-Za-z0-9_-]+/);
+    expect((await alice.post(`/api/v1/invitations/${link.split("/invitation/")[1]!}/accept`)).status).toBe(200);
+    expect(
+      (await gina.post("/api/v1/profiles/me/delete", { confirmEmail: "someone-else@sec.kroov.local" })).status,
+    ).toBe(422);
+    const deleted = await gina.post("/api/v1/profiles/me/delete", { confirmEmail: `gina-${run}@sec.kroov.local` });
+    expect(deleted.status).toBe(200);
+    expect((deleted.json as { data: { deleted: boolean } }).data.deleted).toBe(true);
+    // Sessions purged: the same cookie no longer authenticates; the old password no longer signs in.
+    expect((await gina.get("/api/v1/profiles/me")).status).toBe(401);
+    const again = await fetch(`${baseUrl}/api/auth/sign-in/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: baseUrl! },
+      body: JSON.stringify({ email: `gina-${run}@sec.kroov.local`, password }),
+    });
+    expect([401, 403]).toContain(again.status);
+    // Alice (now sole owner of G) no longer sees Gina among the members.
+    const members = await alice.get(`/api/v1/organizations/${orgG}/members`);
+    expect((members.json as { data: Array<{ email: string }> }).data.map((m) => m.email)).not.toContain(
+      `gina-${run}@sec.kroov.local`,
+    );
+  });
+});

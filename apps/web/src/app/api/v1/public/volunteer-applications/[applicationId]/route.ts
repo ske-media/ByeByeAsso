@@ -19,10 +19,12 @@ function auth(ctx: ApiContext) {
 }
 
 /** GET — candidate (token via ?k= / Bearer, or the signed-in owner). Uniform 404. */
-export const GET = apiRoute<Params>({ auth: "optional" }, async (ctx, { applicationId }) =>
-  ok(await getApplicationForCandidate(db(), ticketingContext(), uuidSchema.parse(applicationId), auth(ctx)), {
-    headers: { "Cache-Control": "no-store" },
-  }),
+export const GET = apiRoute<Params>(
+  { auth: "optional", rateLimit: { scope: "public.volunteers.read", limit: 120, windowSeconds: 60 } },
+  async (ctx, { applicationId }) =>
+    ok(await getApplicationForCandidate(db(), ticketingContext(), uuidSchema.parse(applicationId), auth(ctx)), {
+      headers: { "Cache-Control": "no-store" },
+    }),
 );
 
 /** PATCH — candidate: wishes, availabilities, skills, buddies, constraints, phone. Never the status. */

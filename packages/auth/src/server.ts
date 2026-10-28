@@ -107,7 +107,9 @@ export function createAuth(options: CreateAuthOptions) {
     session: {
       expiresIn: SESSION_MAX_AGE_SECONDS,
       updateAge: SESSION_UPDATE_AGE_SECONDS,
-      cookieCache: { enabled: true, maxAge: 5 * 60 },
+      // Phase 10: no cookie cache — a revoked session (account deletion, sign-out elsewhere) must
+      // stop authenticating at once. The session lookup is one indexed query per request.
+      cookieCache: { enabled: false },
     },
     rateLimit: {
       enabled: rateLimitEnabled,

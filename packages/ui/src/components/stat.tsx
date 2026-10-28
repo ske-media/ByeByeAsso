@@ -44,7 +44,10 @@ export function Stat({ label, value, unit, hint, loading = false, tone, classNam
           {unit ? <span className="ml-1 text-[0.6em] font-bold tracking-normal">{unit}</span> : null}
         </strong>
       )}
-      {hint ? <small className="block text-[11px] leading-[1.5] text-muted">{hint}</small> : null}
+      {hint ? (
+        // On tinted cards the muted grey fails WCAG AA (4.5:1 at 11 px): keep ink, slightly softened.
+        <small className={cn("block text-[11px] leading-[1.5]", tone ? "text-ink/85" : "text-muted")}>{hint}</small>
+      ) : null}
     </div>
   );
 }

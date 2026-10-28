@@ -1,6 +1,6 @@
 import type { Database, DbExecutor } from "@kroov/database";
 import { schema } from "@kroov/database";
-import { and, asc, desc, eq, inArray, isNull, ne, type SQL, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import { recordAudit } from "../audit";
 import { requirePermission } from "../authorization";
 import {
@@ -1718,4 +1718,37 @@ export async function exportContactsCsv(
   });
   const stamp = new Date().toISOString().slice(0, 10);
   return { filename: `contacts-${stamp}.csv`, csv, count: all.length };
+}
+
+/**
+ * Account deletion (phase 10): every contact built on the person's identity (any organization)
+ * is archived and stripped: technical e-mail, no names, no phone, identities removed. Consent
+ * records stay (legal evidence, keyed by contact id, no free-text identity).
+ */
+export async function anonymiseContacts(
+  db: DbExecutor,
+  target: { userId: string; email: string; replacementEmail: string },
+): Promise<number> {
+  const ids = (
+    await db
+      .select({ id: schema.contacts.id })
+      .from(schema.contacts)
+      .where(or(eq(schema.contacts.userId, target.userId), eq(schema.contacts.primaryEmail, target.email)))
+  ).map((r) => r.id);
+  if (ids.length === 0) return 0;
+  await db.delete(schema.contactIdentities).where(inArray(schema.contactIdentities.contactId, ids));
+  await db
+    .update(schema.contacts)
+    .set({
+      primaryEmail: target.replacementEmail,
+      firstName: null,
+      lastName: null,
+      phone: null,
+      userId: null,
+      status: "archived",
+      archivedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(inArray(schema.contacts.id, ids));
+  return ids.length;
 }

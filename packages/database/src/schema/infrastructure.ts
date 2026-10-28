@@ -160,3 +160,29 @@ export const featureFlags = pgTable(
     check("feature_flags_key_format", sql`${t.key} ~ '^[a-z0-9_.-]{2,80}$'`),
   ],
 );
+
+/* ------------------------------------------------------------------------- */
+/* request_rate_limits (phase 10)                                             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Fixed-window counters for anonymous / public surfaces, shared by every web instance.
+ * One row per (scope, subject, window); incremented with an upsert. Rows older than a day
+ * are purged by the retention job.
+ */
+export const requestRateLimits = pgTable(
+  "request_rate_limits",
+  {
+    id: id(),
+    scope: text("scope").notNull(),
+    subject: text("subject").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true, mode: "date" }).notNull(),
+    count: integer("count").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("request_rate_limits_uq").on(t.scope, t.subject, t.windowStart),
+    index("request_rate_limits_window_idx").on(t.windowStart),
+    check("request_rate_limits_count_nonneg", sql`${t.count} >= 0`),
+  ],
+);

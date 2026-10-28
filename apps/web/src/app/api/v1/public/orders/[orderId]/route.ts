@@ -7,14 +7,16 @@ import { buyerTokenFrom, ticketingContext } from "@/lib/ticketing";
 type Params = { orderId: string };
 
 /** GET — buyer (access token via ?k= or Bearer, or the signed-in owner). Uniform 404. */
-export const GET = apiRoute<Params>({ auth: "optional" }, async (ctx, { orderId }) =>
-  ok(
-    await getOrderForBuyer(db(), ticketingContext(), uuidSchema.parse(orderId), {
-      accessToken: buyerTokenFrom(ctx.request),
-      actor: ctx.actor,
-    }),
-    { headers: { "Cache-Control": "no-store" } },
-  ),
+export const GET = apiRoute<Params>(
+  { auth: "optional", rateLimit: { scope: "public.orders.read", limit: 120, windowSeconds: 60 } },
+  async (ctx, { orderId }) =>
+    ok(
+      await getOrderForBuyer(db(), ticketingContext(), uuidSchema.parse(orderId), {
+        accessToken: buyerTokenFrom(ctx.request),
+        actor: ctx.actor,
+      }),
+      { headers: { "Cache-Control": "no-store" } },
+    ),
 );
 
 /** PATCH — buyer: e-mail, names, attendees, opt-in. Only while the order is unpaid and unexpired. */

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Database, DbExecutor } from "@kroov/database";
 import { schema } from "@kroov/database";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
@@ -1355,4 +1356,30 @@ export async function listTickets(
     currency: r.currency,
     usedAt: r.ticket.usedAt,
   }));
+}
+
+/**
+ * Account deletion (phase 10): orders are accounting records and are kept, but the buyer
+ * identity is detached (technical e-mail, no names, no user) and the buyer links are revoked.
+ * Attendee names on issued tickets stay (nominative admission document).
+ */
+export async function anonymiseOrders(
+  db: DbExecutor,
+  target: { userId: string; email: string; replacementEmail: string },
+): Promise<number> {
+  const rows = await db
+    .update(schema.orders)
+    .set({
+      buyerEmail: target.replacementEmail,
+      buyerFirstName: null,
+      buyerLastName: null,
+      userId: null,
+      secretVersion: sql`${schema.orders.secretVersion} + 1`,
+      // Revocation without the signing secret: a hash nobody can reproduce.
+      accessTokenHash: hashToken(`revoked:${randomUUID()}`),
+      updatedAt: new Date(),
+    })
+    .where(or(eq(schema.orders.userId, target.userId), eq(schema.orders.buyerEmail, target.email)))
+    .returning({ id: schema.orders.id });
+  return rows.length;
 }

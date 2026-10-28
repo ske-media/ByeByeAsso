@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Database, DbExecutor } from "@kroov/database";
 import { schema } from "@kroov/database";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
@@ -1554,4 +1555,33 @@ export async function availabilityMatrix(
     };
   });
   return { shifts, volunteers, availablePerShift };
+}
+
+/** Account deletion (phase 10): the person's applications lose their identity; candidate links are revoked. */
+export async function anonymiseVolunteerApplications(
+  db: DbExecutor,
+  target: { userId: string; email: string; replacementEmail: string },
+): Promise<number> {
+  const rows = await db
+    .update(schema.volunteerApplications)
+    .set({
+      firstName: "Compte",
+      lastName: "supprimé",
+      email: target.replacementEmail,
+      phone: null,
+      userId: null,
+      birthYear: null,
+      motivation: null,
+      experience: null,
+      constraints: null,
+      secretVersion: sql`${schema.volunteerApplications.secretVersion} + 1`,
+      // Revocation without the signing secret: a hash nobody can reproduce.
+      accessTokenHash: hashToken(`revoked:${randomUUID()}`),
+      updatedAt: new Date(),
+    })
+    .where(
+      or(eq(schema.volunteerApplications.userId, target.userId), eq(schema.volunteerApplications.email, target.email)),
+    )
+    .returning({ id: schema.volunteerApplications.id });
+  return rows.length;
 }

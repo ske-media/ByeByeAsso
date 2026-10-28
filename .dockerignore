@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/.next
+.tmp
+backups
+docs/captures
+tests/e2e/test-results
+tests/e2e/playwright-report
+.env
+.env.*
+!.env.example
+.git

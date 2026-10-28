@@ -1,6 +1,6 @@
 # Kroov — Architecture
 
-Version : Phase 9 (opérations : tableaux de bord, tâches, notifications) · 28 octobre 2026.
+Version : Phase 10 (durcissement de production) · 28 octobre 2026.
 
 Kroov est un **monolithe modulaire** TypeScript strict déployé en deux processus (web + worker) autour d'une base PostgreSQL unique et autoritaire. Les modules métier vivent dans `packages/domain` et exposent chacun une API publique ; aucune table n'est manipulée depuis un module étranger.
 
@@ -27,6 +27,8 @@ flowchart LR
     AN[analytics]
     TS[tasks]
     NT[notifications]
+    PV[privacy]
+    PF[platform]
     BL[billing]
     AU[audit]
   end
@@ -95,7 +97,7 @@ infra                 docker-compose (Postgres, MinIO, Mailpit)
 4. Les routes (`apps/web`) ne contiennent aucune règle métier : validation → appel de service avec un `Actor` → mapping des erreurs.
 5. Les effets de bord inter-modules passent par des événements typés écrits dans `outbox_events` **dans la même transaction** que la modification d'état.
 
-Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8 — livré), analytics/tasks/notifications (9 — livrés), billing/audit (transverses, à partir de 1).
+Phases d'implémentation par module : identity/organizations/audit (1 — livrés), events (2), ticketing/orders/payments (3), memberships (4), volunteers (5), scheduling (6), crm (7 — livré), marketing (8 — livré), analytics/tasks/notifications (9 — livrés), privacy/platform (10 — livrés), billing (non démarré), audit (transverse).
 
 ## 5. Noyau partagé (`packages/domain/src/kernel`)
 
@@ -122,7 +124,7 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - pg-boss démarre dans le schéma `pgboss` de la même base ; files déclarées dans `apps/worker/src/queue.ts` (`QUEUES`), politique commune : 5 tentatives, backoff exponentiel, conservation 7 jours.
 - Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, publication sur la **file unique `domain.events`** (déclarée par le worker, `eventType` dans la charge utile), marquage `dispatched`, backoff par ligne, échec après 10 tentatives puis **reprise bornée** par `outbox.requeue-failed` (horaire : `failed → pending`, `attempts = 0`, `requeue_count + 1`, 3 reprises au plus). Balayage de sûreté chaque minute. Défaut corrigé en phase 9 : les phases 0–8 publiaient vers des files `event.<type>` jamais déclarées (pg-boss refuse l'envoi), toutes les lignes finissaient `failed`.
 - Consommateur `domain.events` (phase 9) : lots de 10, routage par type dans le domaine (`handleDomainEvent`) → notifications internes et tâches système, idempotents ; type inconnu acquitté.
-- Maintenance : purge horaire des `idempotency_records` expirés, heartbeat chaque minute.
+- Maintenance : purge horaire des `idempotency_records` expirés ; heartbeat chaque minute **écrit une ligne `job_executions`** (lue par `/api/v1/health` et `/api/v1/metrics`) ; `maintenance.retention` quotidien (phase 10 : outbox `dispatched` > 30 j, `job_executions` > 90 j, compteurs de débit > 1 j, notifications lues > 180 j — jamais de donnée métier).
 - Billetterie (phase 3) : `orders.expire-holds` chaque minute (réservations échues → `expired`, places libérées, billets `pending` → `revoked`) ; `payments.reconcile` toutes les 10 min (paiements `pending` depuis > 15 min réinterrogés chez le prestataire et traités comme leur webhook).
 - Marketing (phase 8) : `campaigns.dispatch` chaque minute — campagnes programmées échues (ou laissées `sending` par une panne) réclamées sous `FOR UPDATE SKIP LOCKED`, audience revalidée, envoi par lots avec tentatives bornées.
 - Événements (phase 2) : `events.complete-ended` chaque heure — les événements publiés terminés depuis plus de 24 h passent `completed` (acteur `system`, audit + outbox `event.completed`).
@@ -211,10 +213,23 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - UI : vue d'ensemble (écran 03) avec KPI réels, tâches en retard et notifications non lues dans « À faire aujourd'hui » ; `/o/[slug]/finances` (écran 22) ; blocs « Chiffres » (+ rapport CSV) et « Tâches » sur le pilotage d'événement ; `/o/[slug]/taches` (filtres, création / édition / terminer / rouvrir / supprimer, export) ; `/o/[slug]/notifications` (fil + préférences) ; cloche avec compteur de non-lues dans la barre supérieure (calculé côté serveur dans le layout). Entrées de navigation « Finances » (`analytics.read`) et « Tâches » (`organization.read`) ; slugs réservés `finances`, `taches`, `notifications`.
 - Sécurité : analytics / finances bornés à l'organisation ; exports audités ; tâches tenant-safe (FK composites + vérifications) ; notifications strictement par membre ; aucune valeur financière hors grand livre / remboursements effectifs.
 
+## 7undecies. Durcissement de production (phase 10)
+
+- **Modèle de menaces** : `docs/threat-model.md` — 16 menaces reliées à la mitigation dans le code et au test qui la prouve.
+- **Limitation de débit** (`packages/domain/src/platform/rate-limit.ts`) : fenêtre fixe en PostgreSQL (`request_rate_limits`, un `INSERT … ON CONFLICT DO UPDATE` par requête, partagé par toutes les instances), appliquée par `apiRoute({ rateLimit })` ou `enforceRateLimit` sur les surfaces publiques (création de commande 30/min, candidatures adhésion / bénévole 10/min, désinscription 30/min, consultation par jeton 60–120/min, liens suivis 120/min) ; 429 + `Retry-After` + `RateLimit-Limit`. Sujet = `x-forwarded-for` seulement si `TRUST_PROXY=true`, sinon `direct`. `RATE_LIMIT_FACTOR` multiplie les limites (tests). Les routes authentifiées ne sont pas limitées (RBAC) ; Better Auth limite l'authentification.
+- **Confidentialité** (`packages/domain/src/privacy`) : `exportPersonalData` (JSON de la personne connectée uniquement, audité) et `deleteAccount` (anonymisation en une transaction : chaque module propriétaire expose son `anonymise*` — identity, memberships, volunteers, ticketing, crm, notifications — orchestré ici ; refus 412 `last_owner` ; sessions et comptes supprimés ; cookies effacés par la route ; jetons d'accès révoqués par un hachage non reproductible). Les enregistrements comptables sont conservés sans identité.
+- **Observabilité** (`packages/domain/src/platform/observability.ts`) : `platformSnapshot` (latence base, dernier heartbeat worker et âge, outbox pending / failed / plus ancienne ligne, files pg-boss, commandes payées 24 h, webhooks en échec 24 h) servi par `/api/v1/health` (`ok` / `degraded` / `down`) et `/api/v1/metrics` (Prometheus, Bearer `METRICS_TOKEN`). `apiRoute` journalise une ligne par requête (`requestId`, méthode, chemin sans query string, statut, durée) et renvoie `x-request-id`.
+- **En-têtes** (`apps/web/next.config.ts`) : CSP (`default-src 'self'`, scripts / styles `'unsafe-inline'` sans origine externe, `img-src data: blob:`, `frame-ancestors 'none'`, `form-action 'self'`, `object-src 'none'`, `upgrade-insecure-requests` en production / staging), HSTS deux ans en production / staging.
+- **Sessions** : plus de cache cookie Better Auth — une révocation (suppression de compte, déconnexion) est immédiate.
+- **Gardes de configuration** (`productionIssues` dans `packages/config/src/env.ts`) : en `production` / `staging`, refus au démarrage du prestataire simulé, des e-mails console / file, du secret de webhook par défaut, d'`APP_URL` non https, d'identifiants de développement, de clés Stripe / Resend manquantes.
+- **Accessibilité** : audit axe-core (WCAG 2.1 A / AA, contraste inclus) dans `tests/e2e/a11y.e2e.ts` sur 19 écrans × 2 viewports ; corrections : nom accessible du menu utilisateur, contraste du texte atténué sur les surfaces teintées (règle non superposée dans `styles.css`, `Stat` sur carte teintée).
+- **Index** (migration `0010_hardening`) : `orders (organization_id, status, paid_at)`, `tickets (organization_id, status)`, `refunds (organization_id, status, succeeded_at)` pour les tableaux de bord et finances.
+- **Exploitation** : `scripts/backup.sh` / `scripts/restore.sh` (runbook `docs/runbooks/backup-restore.md`, exercice réel), `scripts/load-test.mjs` (autocannon), images `infra/docker/*.Dockerfile` + `infra/docker-compose.prod.yml`, `docs/deployment.md`, `docs/production-checklist.md`.
+
 ## 8. Sécurité (fondation)
 
 - Environnement validé au démarrage (`packages/config/src/env.ts`) : échec explicite, chaînes vides = non configuré, secrets sans valeur par défaut.
-- En-têtes HTTP : `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` (caméra autorisée en `self` pour le scanner).
+- En-têtes HTTP : `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` (caméra autorisée en `self` pour le scanner), CSP et HSTS (phase 10, §7undecies).
 - Logs structurés pino avec redaction (`authorization`, `cookie`, `*.password`, `*.secret`, `*.token`, `*.qrCredential`).
 - `scripts/scan-secrets.mjs` exécuté par `tests/security` et en CI.
 - Page `/design-system` : 404 en production (données de démonstration non servies).

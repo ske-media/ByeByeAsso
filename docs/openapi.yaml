@@ -1,14 +1,16 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.9.0-phase9
+  version: 0.10.0-phase10
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
     `{ "error": { "code", "message", "fieldErrors?", "details?" } }`.
 
     Codes : 400 `invalid_json` · 401 `unauthenticated` · 403 `forbidden` / `forbidden_origin` ·
-    404 `not_found` · 409 `conflict` · 412 `precondition_failed` · 422 `validation_failed` · 500 `internal`.
+    404 `not_found` · 409 `conflict` · 412 `precondition_failed` · 422 `validation_failed` · 429 `rate_limited`
+    (surfaces publiques, en-têtes `Retry-After` / `RateLimit-Limit`) · 500 `internal` (avec `details.requestId`).
+    Chaque réponse porte `x-request-id` (repris de la requête ou généré).
 
     Idempotence : les lectures sont idempotentes ; `POST /organizations` et `POST …/invitations` sont
     protégés par unicité (slug, e-mail en attente) ; `POST /invitations/{token}/accept` est à usage unique
@@ -60,6 +62,10 @@ components:
       type: apiKey
       in: cookie
       name: kroov.session_token
+    bearer:
+      type: http
+      scheme: bearer
+      description: Jeton METRICS_TOKEN (exposition Prometheus uniquement)
   schemas:
     Error:
       type: object
@@ -1959,6 +1965,11 @@ components:
         description: "409 stale_version — l'événement a été modifié entre-temps ; rechargez.",
         content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
       }
+    RateLimited:
+      {
+        description: "429 rate_limited — trop de requêtes pour cette adresse ; `Retry-After` en secondes.",
+        content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
     EventData:
       {
         description: OK,
@@ -1971,6 +1982,53 @@ components:
 security:
   - session: []
 paths:
+  /health:
+    get:
+      summary: "État réel du service : base, heartbeat du worker, arriéré outbox (ok | degraded | down)"
+      security: []
+      responses:
+        "200": { description: "{ status: ok | degraded, version, checks: { database, worker, outbox }, timestamp }" }
+        "503": { description: "Base injoignable ({ status: down })" }
+  /metrics:
+    get:
+      summary: "Exposition Prometheus (texte 0.0.4) — Bearer METRICS_TOKEN ; 404 si non configuré ; aucune donnée personnelle"
+      security: [{ bearer: [] }]
+      responses:
+        "200": { description: "text/plain; version=0.0.4" }
+        "401": { description: Jeton absent ou invalide }
+        "404": { description: Exposition désactivée }
+  /profiles/me/export:
+    get:
+      summary: "Export de ses propres données (JSON téléchargeable) — profil, organisations et rôles, adhésions, commandes et billets, candidatures, notifications, préférences, journal de ses actions ; audité"
+      responses:
+        "200": { description: "application/json (Content-Disposition: attachment)" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /profiles/me/delete:
+    post:
+      summary: "Supprimer son compte par anonymisation — { confirmEmail } ; 412 last_owner tant que la personne est seule propriétaire d'une organisation ; sessions purgées, cookies effacés"
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [confirmEmail],
+                      properties: { confirmEmail: { type: string, format: email } },
+                    },
+                },
+            },
+        }
+      responses:
+        "200":
+          {
+            description: "{ deleted: true, anonymised: { memberships, orders, volunteerApplications, contacts, organizationsLeft } }",
+          }
+        "412": { description: "last_owner — details.organizations liste les organisations concernées" }
+        "422": { $ref: "#/components/responses/Validation" }
   /profiles/me:
     get:
       summary: Profil de l'utilisateur connecté

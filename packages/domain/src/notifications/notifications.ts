@@ -322,3 +322,9 @@ export async function setPreferences(
   });
   return getPreferences(db, actor, organizationId);
 }
+
+/** Account deletion (phase 10): a deleted member keeps no notification nor preference. */
+export async function anonymiseNotifications(db: DbExecutor, userId: string): Promise<void> {
+  await db.delete(schema.notifications).where(eq(schema.notifications.userId, userId));
+  await db.delete(schema.notificationPreferences).where(eq(schema.notificationPreferences.userId, userId));
+}

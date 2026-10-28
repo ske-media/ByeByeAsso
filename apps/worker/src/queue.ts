@@ -33,6 +33,7 @@ export const QUEUES = {
   domainEvents: "domain.events",
   maintenanceExpireIdempotency: "maintenance.expire-idempotency",
   maintenanceHeartbeat: "maintenance.heartbeat",
+  maintenanceRetention: "maintenance.retention",
   eventsComplete: "events.complete-ended",
   ordersExpire: "orders.expire-holds",
   paymentsReconcile: "payments.reconcile",

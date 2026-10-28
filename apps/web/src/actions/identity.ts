@@ -2,6 +2,7 @@
 
 import { updateProfile } from "@kroov/domain/identity";
 import { acceptInvitation } from "@kroov/domain/organizations";
+import { deleteAccount } from "@kroov/domain/privacy";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { type ActionState, actionError, formValues } from "@/lib/actions";
@@ -30,4 +31,15 @@ export async function acceptInvitationAction(token: string): Promise<ActionState
     return actionError(error);
   }
   redirect(`/o/${slug}?bienvenue=1`);
+}
+
+/** Account deletion (phase 10): anonymisation in one transaction, then sign-out by cookie purge. */
+export async function deleteAccountAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const values = formValues(formData);
+  try {
+    await deleteAccount(db(), await currentActor(), { confirmEmail: values.confirmEmail ?? "" });
+  } catch (error) {
+    return actionError(error, values);
+  }
+  redirect("/moi/compte-supprime");
 }

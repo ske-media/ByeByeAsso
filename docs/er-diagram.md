@@ -1,6 +1,6 @@
 # Diagramme entité-relation
 
-Mis à jour à chaque phase. Phase 0 : INFRASTRUCTURE · Phase 1 : AUTH (Better Auth) + IDENTITY · Phase 2 : EVENTS (lieux, événements, réglages, fichiers/médias, formulaires dynamiques — posés, servis par les phases 5 et 9) · Phase 3 : TICKETING (tarifs, pools, réservations, commandes, billets, contrôles, codes promo) + PAYMENTS (comptes connectés, paiements, webhooks, remboursements, ledger en partie double, documents financiers posés) · Phase 9 : OPERATIONS (tâches, notifications internes, préférences ; `outbox_events.requeue_count`). Aucune table d'agrégats : les tableaux de bord sont des requêtes sur les sources de vérité.
+Mis à jour à chaque phase. Phase 0 : INFRASTRUCTURE · Phase 1 : AUTH (Better Auth) + IDENTITY · Phase 2 : EVENTS (lieux, événements, réglages, fichiers/médias, formulaires dynamiques — posés, servis par les phases 5 et 9) · Phase 3 : TICKETING (tarifs, pools, réservations, commandes, billets, contrôles, codes promo) + PAYMENTS (comptes connectés, paiements, webhooks, remboursements, ledger en partie double, documents financiers posés) · Phase 9 : OPERATIONS (tâches, notifications internes, préférences ; `outbox_events.requeue_count`) · Phase 10 : durcissement (`request_rate_limits`, `users.deleted_at`, index des tableaux de bord). Aucune table d'agrégats : les tableaux de bord sont des requêtes sur les sources de vérité.
 
 ```mermaid
 erDiagram
@@ -136,6 +136,7 @@ erDiagram
 
   users {
     uuid id PK
+    timestamptz deleted_at
     text name
     text email UK
     boolean email_verified
@@ -1037,6 +1038,13 @@ erDiagram
     boolean enabled
     uuid organization_id FK
   }
+  request_rate_limits {
+    uuid id PK
+    text scope
+    text subject
+    timestamptz window_start
+    int count
+  }
   idempotency_records {
     uuid id PK
     text scope
@@ -1103,6 +1111,8 @@ erDiagram
 | `notifications`                                       | `UNIQUE (organization_id, user_id, dedupe_key)`, `CHECK kind ~ '^[a-z_]+\.[a-z_]+$'`, index partiel non-lues                                                                                                                                                                               | **une notification par membre et par événement de domaine** (consommateur idempotent sous retries)                                          |
 | `notification_preferences`                            | `UNIQUE (organization_id, user_id, kind)`                                                                                                                                                                                                                                                  | une préférence par membre et type                                                                                                           |
 | `outbox_events`                                       | `CHECK requeue_count >= 0`                                                                                                                                                                                                                                                                 | reprise bornée des lignes échouées (3 au plus, job horaire)                                                                                 |
+| `request_rate_limits`                                 | `UNIQUE (scope, subject, window_start)`, `CHECK count >= 0`                                                                                                                                                                                                                                | un compteur par fenêtre fixe et par appelant, incrément atomique (`ON CONFLICT … DO UPDATE`)                                                |
+| `users`                                               | `deleted_at` (phase 10) ; adresse remplacée par `deleted-<id>@anonymised.kroov.invalid` (unique), sessions et comptes supprimés                                                                                                                                                            | un compte supprimé ne peut plus ouvrir de session ; l'adresse d'origine redevient libre                                                     |
 | infra                                                 | `UNIQUE (scope, key)`, index partiel `status = 'pending'`, uniques partiels des drapeaux                                                                                                                                                                                                   | idempotence, relais, surcharge par organisation                                                                                             |
 
 Les machines à états commande (`draft → reserved → awaiting_payment → paid`, `expired`, `failed → awaiting_payment`, `paid → partially_refunded → refunded`, `expired → paid` pour un paiement tardif réconcilié), paiement (`created → pending → succeeded | failed | cancelled`, `failed → succeeded` : un succès tardif prévaut) et billet (`pending → valid → used`, `valid | used → refunded`, `revoked`) vivent dans `packages/domain/src/ticketing/state-machines.ts`. L'absence de survente est garantie en transaction : verrou de ligne sur l'organisation puis sur l'événement à chaque réservation, disponibilité recalculée (quota, pool, capacité − billets émis − réservations actives).
@@ -1118,3 +1128,5 @@ Le statut marketing d'un contact (`marketing_email_status`) est une dénormalisa
 La machine à états des campagnes (`draft → scheduled | cancelled`, `scheduled → draft | cancelled | sending`, `sending → sent | partially_failed | failed`, terminaux sans retour) vit dans `packages/domain/src/marketing/state-machine.ts` ; le passage en `sending` est réservé au worker sous `SELECT … FOR UPDATE SKIP LOCKED`. L'éligibilité d'un destinataire (consentement explicite — ou exception client si décidée —, absence d'exclusion active, adresse valide, pas de doublon) n'est jamais lue depuis l'instantané : elle est recalculée à l'envoi depuis `contacts` et `contact_suppressions`.
 
 Les tableaux de bord (phase 9) ne lisent que des sources de vérité : billets, commandes, contrôles, grand livre (`ledger_entries`, crédits négatifs), remboursements effectifs, adhésions, candidatures, planning publié, livraisons de campagnes. Le « net organisateur » est étiqueté estimation : hors frais du prestataire de paiement et versements, que Kroov ne connaît pas encore. Les notifications internes sont produites par le consommateur `domain.events` à partir des lignes d'outbox ; `dedupe_key = <type>:<agrégat>` garantit l'idempotence sous retries.
+
+Suppression de compte (phase 10) : aucune ligne métier n'est effacée — `users`, `memberships`, `volunteer_applications`, `orders`, `contacts` sont anonymisés (adresse technique, noms neutralisés, `user_id` à NULL, jetons d'accès révoqués), `organization_members` passe `removed`, `sessions` / `accounts` / `notifications` / `notification_preferences` sont supprimés. Les contraintes d'unicité restent satisfaites car l'adresse de remplacement est unique par personne.

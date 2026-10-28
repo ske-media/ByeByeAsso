@@ -1,4 +1,5 @@
 import { confirmUnsubscribe } from "@kroov/domain/marketing";
+import { enforceRateLimit } from "@/lib/api";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { marketingContext } from "@/lib/marketing";
@@ -8,6 +9,8 @@ import { marketingContext } from "@/lib/marketing";
  * GET redirects to the human page. No session, no origin check: the signed reference IS the authorization.
  */
 export async function POST(request: Request, context: { params: Promise<{ ref: string }> }): Promise<Response> {
+  const limited = await enforceRateLimit(request, { scope: "public.unsubscribe", limit: 30, windowSeconds: 60 });
+  if (limited) return limited;
   const { ref } = await context.params;
   const done = await confirmUnsubscribe(db(), marketingContext(), ref, request.headers.get("user-agent"));
   if (!done) return new Response("Référence inconnue.", { status: 404 });

@@ -157,3 +157,12 @@
     border: 0;
   }
 }
+
+/* Accessibility (phase 10): the muted grey fails WCAG AA on tinted surfaces; keep ink, softened.
+   Unlayered on purpose: it must win over the `text-muted` utility (cascade layers). */
+.bg-lime .text-muted,
+.bg-pink .text-muted,
+.bg-orange .text-muted,
+.bg-lavender .text-muted {
+  color: color-mix(in srgb, var(--color-ink) 85%, transparent);
+}

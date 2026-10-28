@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Database, DbExecutor } from "@kroov/database";
 import { schema } from "@kroov/database";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
@@ -1274,3 +1275,25 @@ export async function sendRenewalReminders(
 }
 
 export { actorLabel };
+
+/** Account deletion (phase 10): memberships of the person lose their identity; links are revoked. */
+export async function anonymiseMemberships(
+  db: DbExecutor,
+  target: { userId: string; email: string; replacementEmail: string },
+): Promise<number> {
+  const rows = await db
+    .update(schema.memberships)
+    .set({
+      memberFirstName: "Compte",
+      memberLastName: "supprimé",
+      memberEmail: target.replacementEmail,
+      userId: null,
+      secretVersion: sql`${schema.memberships.secretVersion} + 1`,
+      // Revocation without the signing secret: a hash nobody can reproduce.
+      accessTokenHash: hashToken(`revoked:${randomUUID()}`),
+      updatedAt: new Date(),
+    })
+    .where(or(eq(schema.memberships.userId, target.userId), eq(schema.memberships.memberEmail, target.email)))
+    .returning({ id: schema.memberships.id });
+  return rows.length;
+}
