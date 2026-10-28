@@ -8,7 +8,7 @@ import {
   listTeams,
   type VolunteerApplicationStatus,
 } from "@kroov/domain/volunteers";
-import { EmptyState, ForbiddenState, PageHeader, Panel, PanelTitle, Stat, StatGrid } from "@kroov/ui";
+import { ForbiddenState, PageHeader, Panel, PanelTitle, Stat, StatGrid } from "@kroov/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { db } from "@/lib/db";
@@ -144,35 +144,29 @@ export default async function VolunteersPage({
       {tab === "candidatures" || !orgWide ? (
         <Panel>
           <PanelTitle>Candidatures</PanelTitle>
-          {applications.length === 0 ? (
-            <EmptyState
-              title="Aucune candidature"
-              description={
-                sp.q || status !== "all" || positionId || skillId
-                  ? "Aucune candidature ne correspond à ce filtre."
-                  : "Ouvrez le recrutement depuis la page « Bénévoles » d'un événement : les candidatures arriveront ici."
-              }
-            />
-          ) : (
-            <ApplicationsTable
-              organizationId={org.id}
-              slug={slug}
-              showEvent={!eventId}
-              rows={applications.map((a) => ({
-                id: a.id,
-                number: a.number,
-                status: a.status,
-                name: `${a.firstName} ${a.lastName}`,
-                email: a.email,
-                eventTitle: a.eventTitle,
-                firstChoice: a.firstChoice,
-                skillsCount: a.skillsCount,
-                verifiedSkillsCount: a.verifiedSkillsCount,
-                effectiveHours: a.effectiveHours,
-                receivedLabel: formatDateFr(a.createdAt, org.timezone),
-              }))}
-            />
-          )}
+          <ApplicationsTable
+            organizationId={org.id}
+            slug={slug}
+            showEvent={!eventId}
+            emptyDescription={
+              sp.q || status !== "all" || positionId || skillId
+                ? "Aucune candidature ne correspond à ce filtre."
+                : "Ouvrez le recrutement depuis la page « Bénévoles » d'un événement : les candidatures arriveront ici."
+            }
+            rows={applications.map((a) => ({
+              id: a.id,
+              number: a.number,
+              status: a.status,
+              name: `${a.firstName} ${a.lastName}`,
+              email: a.email,
+              eventTitle: a.eventTitle,
+              firstChoice: a.firstChoice,
+              skillsCount: a.skillsCount,
+              verifiedSkillsCount: a.verifiedSkillsCount,
+              effectiveHours: a.effectiveHours,
+              receivedLabel: formatDateFr(a.createdAt, org.timezone),
+            }))}
+          />
           {events.length > 0 ? (
             <p className="mt-3 text-[12px] text-muted">
               Postes et créneaux par événement :{" "}

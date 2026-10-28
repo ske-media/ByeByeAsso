@@ -1122,3 +1122,210 @@ describeLive("S7. volunteers — isolation, candidate token, no exposure of othe
     ).toBe(409);
   });
 });
+
+describeLive("S8. scheduling — isolation, publication guards, draft invisibility", () => {
+  let eventS: EventJson;
+  let positionId: string;
+  let shiftId: string;
+  let versionId: string;
+  let versionToken: number;
+  let maya: { id: string; accessToken: string };
+  let lou: { id: string; accessToken: string };
+  const inHours = (days: number, hour: number) => inDays(days, hour);
+  const api = (path: string) => `/api/v1/organizations/${orgA.id}/events/${eventS.id}${path}`;
+
+  beforeAll(async () => {
+    const team = await alice.post(`/api/v1/organizations/${orgA.id}/volunteer-teams`, { name: `Accueil ${run}` });
+    const position = await alice.post(`/api/v1/organizations/${orgA.id}/volunteer-positions`, {
+      teamId: (team.json as { data: { id: string } }).data.id,
+      name: `Accueil ${run}`,
+    });
+    positionId = (position.json as { data: { id: string } }).data.id;
+    const loc = await alice.post(`/api/v1/organizations/${orgA.id}/locations`, { name: "Salle S", city: "Paris" });
+    const ev = await alice.post(`/api/v1/organizations/${orgA.id}/events`, {
+      title: `Nuit du planning ${run}`,
+      description: "Une soirée où le planning se propose, s'arbitre et se publie — jamais tout seul.",
+      startsAt: inHours(50, 18),
+      endsAt: inHours(51, 2),
+      capacity: 100,
+      locationId: (loc.json as { data: { id: string } }).data.id,
+    });
+    eventS = (ev.json as { data: EventJson }).data;
+    expect((await alice.post(api("/publish"), { version: eventS.version })).status).toBe(200);
+    const ep = await alice.post(api("/volunteer-positions"), { positionId });
+    const epId = (ep.json as { data: { id: string } }).data.id;
+    const shift = await alice.post(api(`/volunteer-positions/${epId}/shifts`), {
+      startsAt: inHours(50, 18),
+      endsAt: inHours(50, 22),
+      requiredCount: 1,
+      maxCount: 1,
+    });
+    shiftId = (shift.json as { data: { id: string } }).data.id;
+    expect((await alice.patch(api("/volunteering"), { recruitmentStatus: "open" })).status).toBe(200);
+    const anon = new ApiClient(baseUrl!);
+    const applyAs = async (first: string) => {
+      const res = await anon.post(
+        `/api/v1/public/organizations/${orgA.slug}/events/${eventS.slug}/volunteer-applications`,
+        {
+          email: `${first.toLowerCase()}-s-${run}@sec.kroov.local`,
+          firstName: first,
+          lastName: "Test",
+          positionPreferences: [positionId],
+          availabilities: [{ kind: "available", startsAt: inHours(50, 16), endsAt: inHours(51, 3) }],
+        },
+      );
+      expect(res.status).toBe(201);
+      const data = (res.json as { data: { id: string; accessToken: string } }).data;
+      expect(
+        (await alice.post(`/api/v1/organizations/${orgA.id}/volunteer-applications/${data.id}/approve`)).status,
+      ).toBe(200);
+      return data;
+    };
+    maya = await applyAs("Maya");
+    lou = await applyAs("Lou");
+  }, 60_000);
+
+  it("outsiders and other organizations cannot create, read or publish schedule versions", async () => {
+    expect((await carol.post(api("/schedule-versions"), {})).status).toBe(403);
+    expect((await carol.get(api("/schedule-versions"))).status).toBe(403);
+    expect((await dave.get(api("/schedule-versions"))).status).toBe(403);
+    expect((await bob.post(`/api/v1/organizations/${orgB.id}/events/${eventS.id}/schedule-versions`, {})).status).toBe(
+      404,
+    );
+    const created = await alice.post(api("/schedule-versions"), { notes: "Essai" });
+    expect(created.status).toBe(201);
+    versionId = (created.json as { data: { id: string } }).data.id;
+    expect(
+      (await bob.get(`/api/v1/organizations/${orgB.id}/events/${eventS.id}/schedule-versions/${versionId}`)).status,
+    ).toBe(404);
+    expect((await carol.post(api(`/schedule-versions/${versionId}/generate`), {})).status).toBe(403);
+  });
+
+  it("the engine proposes a draft; manual assignment is validated with the hard reason; the draft is invisible to volunteers", async () => {
+    const gen = await alice.post(api(`/schedule-versions/${versionId}/generate`), {});
+    expect(gen.status).toBe(200);
+    const data = (
+      gen.json as {
+        data: { version: { status: string }; run: { status: string; coveredCount: number; inputHash: string } };
+      }
+    ).data;
+    expect(data.version.status).toBe("proposed");
+    expect(data.run).toMatchObject({ status: "succeeded", coveredCount: 1 });
+    expect(data.run.inputHash).toHaveLength(64);
+    const detail = (await alice.get(api(`/schedule-versions/${versionId}`))).json as {
+      data: {
+        version: number;
+        shifts: Array<{ assignments: Array<{ id: string; applicationId: string }> }>;
+        conflicts: unknown[];
+      };
+    };
+    expect(detail.data.conflicts).toEqual([]);
+    const assigned = detail.data.shifts[0]!.assignments[0]!;
+    const other = assigned.applicationId === maya.id ? lou : maya;
+    // The shift is full (max 1): the second volunteer is refused with an explanation, never silently.
+    const refused = await alice.post(api(`/schedule-versions/${versionId}/assignments`), {
+      shiftId,
+      applicationId: other.id,
+    });
+    expect(refused.status).toBe(412);
+    expect((refused.json as { error: { details?: { reason?: string } } }).error.details?.reason).toBe("shift_full");
+    // Nothing is published: volunteers see no mission, whatever the token.
+    const anon = new ApiClient(baseUrl!);
+    expect(
+      (await anon.get(`/api/v1/public/volunteer-applications/${maya.id}/missions?k=${maya.accessToken}`)).json,
+    ).toEqual({ data: [] });
+    expect((await anon.get(`/api/v1/public/volunteer-applications/${maya.id}/missions`)).status).toBe(404);
+    versionToken = detail.data.version;
+  });
+
+  it("publication: scanner cannot publish; stale token 409; concurrent publish → one winner; published version is immutable", async () => {
+    // Yanis-like scanner role: carol has no role; dave is event_manager on another event → 403.
+    expect(
+      (await dave.post(api(`/schedule-versions/${versionId}/publish`), { expectedVersion: versionToken })).status,
+    ).toBe(403);
+    expect(
+      (await carol.post(api(`/schedule-versions/${versionId}/publish`), { expectedVersion: versionToken })).status,
+    ).toBe(403);
+    const stale = await alice.post(api(`/schedule-versions/${versionId}/publish`), {
+      expectedVersion: versionToken + 7,
+    });
+    expect(stale.status).toBe(409);
+    expect((stale.json as { error: { details?: { code?: string } } }).error.details?.code).toBe("stale_version");
+    const [a, b] = await Promise.all([
+      alice.post(api(`/schedule-versions/${versionId}/publish`), { expectedVersion: versionToken }),
+      alice.post(api(`/schedule-versions/${versionId}/publish`), { expectedVersion: versionToken }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(
+      (await alice.post(api(`/schedule-versions/${versionId}/assignments`), { shiftId, applicationId: maya.id }))
+        .status,
+    ).toBe(412);
+    expect((await alice.post(api(`/schedule-versions/${versionId}/generate`), {})).status).toBe(412);
+    // Exactly one published version.
+    const list = (await alice.get(api("/schedule-versions"))).json as { data: Array<{ status: string }> };
+    expect(list.data.filter((v) => v.status === "published")).toHaveLength(1);
+  });
+
+  it("volunteers see only their own published missions; confirmation and reports need their token; a report never removes the mission", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const detail = (await alice.get(api(`/schedule-versions/${versionId}`))).json as {
+      data: { shifts: Array<{ assignments: Array<{ id: string; applicationId: string }> }> };
+    };
+    const assignment = detail.data.shifts[0]!.assignments[0]!;
+    const owner = assignment.applicationId === maya.id ? maya : lou;
+    const stranger = owner === maya ? lou : maya;
+    const mine = (await anon.get(`/api/v1/public/volunteer-applications/${owner.id}/missions?k=${owner.accessToken}`))
+      .json as { data: Array<{ assignmentId: string }> };
+    expect(mine.data.map((m) => m.assignmentId)).toEqual([assignment.id]);
+    expect(JSON.stringify(mine)).not.toMatch(/applicationId|email/);
+    expect(
+      (await anon.get(`/api/v1/public/volunteer-applications/${stranger.id}/missions?k=${stranger.accessToken}`)).json,
+    ).toEqual({ data: [] });
+    // The stranger cannot confirm or report the owner's mission (404, even with a valid own token).
+    expect(
+      (
+        await anon.post(
+          `/api/v1/public/volunteer-applications/${stranger.id}/missions/${assignment.id}/confirm?k=${stranger.accessToken}`,
+          {},
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await anon.post(
+          `/api/v1/public/volunteer-applications/${owner.id}/missions/${assignment.id}/confirm?k=forged`,
+          {},
+        )
+      ).status,
+    ).toBe(404);
+    const confirmed = await anon.post(
+      `/api/v1/public/volunteer-applications/${owner.id}/missions/${assignment.id}/confirm?k=${owner.accessToken}`,
+      {},
+    );
+    expect(confirmed.status).toBe(200);
+    expect((confirmed.json as { data: Array<{ confirmationStatus: string }> }).data[0]?.confirmationStatus).toBe(
+      "confirmed",
+    );
+    const reported = await anon.post(
+      `/api/v1/public/volunteer-applications/${owner.id}/missions/${assignment.id}/report-unavailable?k=${owner.accessToken}`,
+      { message: "Empêchement" },
+    );
+    expect(reported.status).toBe(200);
+    // The assignment is still there for the organizer, flagged declined with an open request.
+    const after = (await alice.get(api(`/schedule-versions/${versionId}`))).json as {
+      data: {
+        shifts: Array<{ assignments: Array<{ id: string; confirmationStatus: string; openRequest: unknown }> }>;
+        openRequests: number;
+      };
+    };
+    expect(after.data.shifts[0]!.assignments.find((x) => x.id === assignment.id)).toMatchObject({
+      confirmationStatus: "declined",
+    });
+    expect(after.data.openRequests).toBe(1);
+    expect((await carol.get(api("/assignment-requests"))).status).toBe(403);
+    expect(((await alice.get(api("/assignment-requests"))).json as { data: unknown[] }).data).toHaveLength(1);
+    // Attendance: only on the published version, only by A's staff.
+    expect((await carol.request("PUT", api(`/attendance/${assignment.id}`), { status: "present" })).status).toBe(403);
+    expect((await alice.request("PUT", api(`/attendance/${assignment.id}`), { status: "present" })).status).toBe(204);
+  });
+});

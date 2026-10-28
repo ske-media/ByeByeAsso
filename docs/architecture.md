@@ -1,6 +1,6 @@
 # Kroov — Architecture
 
-Version : Phase 1 (identité et organisations) · 28 octobre 2026.
+Version : Phase 6 (planning intelligent) · 28 octobre 2026.
 
 Kroov est un **monolithe modulaire** TypeScript strict déployé en deux processus (web + worker) autour d'une base PostgreSQL unique et autoritaire. Les modules métier vivent dans `packages/domain` et exposent chacun une API publique ; aucune table n'est manipulée depuis un module étranger.
 
@@ -78,7 +78,7 @@ packages/auth         catalogue permissions / rôles ("@kroov/auth"), instance B
 packages/ui           tokens de design, primitives, shells (organisation / public / contrôle)
 packages/payments     port fournisseur de paiement
 packages/notifications port e-mail + adaptateurs console / file (tests) / smtp, gabarit transactionnel
-packages/scheduling   contrat du moteur de planning (entrée immuable → proposition)
+packages/scheduling   contrat historique (phase 0) du moteur ; le moteur réel vit dans packages/domain/src/scheduling/engine.ts
 tests/integration     tests sur PostgreSQL réel (DATABASE_URL_TEST)
 tests/security        tests négatifs (secrets, isolation tenant à partir de la phase 1)
 tests/e2e             Playwright
@@ -168,6 +168,16 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Contraintes dures posées pour la phase 6 : compétence obligatoire d'un poste satisfaite = déclarée **et** vérifiée quand `requires_verification` ; créneaux bornés (≤ 24 h, dans la fenêtre) ; `events.volunteer_max_hours` / `volunteer_min_rest_minutes` ; préférences de poste et binôme = contraintes souples.
 - Autorisation : `volunteers.review` (lecture catalogue, candidatures, décisions) et `volunteers.schedule` (postes activés, créneaux, réglages) évaluées au périmètre événement ; `listApplications` restreint un responsable limité à ses événements.
 - Décisions en lot : chaque enregistrement est validé et commité dans sa propre transaction ; le résultat est détaillé par enregistrement et un échec n'annule pas les autres.
+
+## 7septies. Planning intelligent (phase 6)
+
+- Domaine `packages/domain/src/scheduling` : `engine.ts` (moteur pur, déterministe, sans I/O), `state-machine.ts` (version `draft → generating → proposed | generation_failed → under_review → published → superseded`), `schemas.ts`, `scheduling.ts` (versions, exécutions, affectations, publication, missions, demandes, présence, vue d'ensemble), `emails.ts`. Le paquet `@kroov/scheduling` (contrat posé en phase 0) reste un port non câblé : le moteur est appelé **en ligne** dans la requête (bornes : itérations et 5 s), ce qui suffit aux volumes visés ; un passage par pg-boss ne change ni l'entrée ni la sortie, journalisées à l'identique.
+- Moteur `kroov-greedy-ls/1` : entrée immuable (créneaux, bénévoles acceptés avec disponibilités, compétences vérifiées, vœux, binômes, année de naissance, engagements publiés ailleurs, verrous, règles de l'événement, pondérations). **Contraintes dures jamais échangées** : couverture totale du créneau par la disponibilité, compétences obligatoires (vérifiées si requis), âge minimal, non-chevauchement, repos minimal entre missions, heures max par jour civil dans le fuseau de l'événement, effectif max du créneau ; un verrou n'est conservé que s'il reste valide (sinon listé dans `invalidLocks`). Critères souples lexicographiques après la couverture : vœux de poste (10 / rang, malus si non souhaité), adéquation horaire, binôme réciproque sur le même créneau, équité de charge, compétence optionnelle. Glouton « créneau le plus rare d'abord » puis recherche locale à un niveau (combler les manques, échanges améliorants). Sortie = PROPOSITION avec, par créneau non pourvu, les raisons par personne écartée (libellés français) ; `solverStatus` `complete | partial | infeasible`.
+- Versions par événement (`V1`, `V2`…) ; une seule publiée (index unique partiel). Chaque exécution est journalisée dans `schedule_generation_runs` avec l'instantané d'entrée et son empreinte SHA-256 (rejouable), les pondérations, le périmètre (régénération partielle par créneaux : seules les affectations non verrouillées du périmètre sont remplacées), le score et les diagnostics. Une version `published` / `superseded` est immuable (412 `version_immutable`) : toute modification passe par une nouvelle version, éventuellement **basée sur** la publiée.
+- Publication = décision humaine, en transaction sous `SELECT … FOR UPDATE` de l'événement : jeton `expectedVersion` (409 `stale_version`), revalidation de chaque affectation **sur les données actuelles** (une disponibilité retirée ou un créneau déplacé depuis la proposition bloque : 412 `conflicts`), besoins non pourvus à assumer explicitement (`acknowledgeUnfilled`, 412 `unfilled`), version précédente passée en `superseded`, candidatures en `assigned`, confirmations conservées pour les missions inchangées, e-mail **uniquement** aux bénévoles dont les missions changent (lignes NOUVEAU / RETIRÉ). Deux publications concurrentes : une seule aboutit.
+- Côté bénévole : `active_volunteer_commitments` (vue SQL) et « mes missions » ne montrent que la version publiée — jamais une proposition. Confirmer une mission ; signaler une indisponibilité **n'enlève jamais** l'affectation : elle passe en `declined` et ouvre une demande d'arbitrage (une seule ouverte par mission) que l'équipe traite ou écarte. Présence pointable uniquement sur la version publiée (`volunteers.schedule` ou `checkins.scan`).
+- Explicabilité : la vue de version expose, par créneau, les personnes affectables, les personnes écartées **et pourquoi**, les conflits sur données actuelles, les verrous invalides, la charge (missions, heures) par bénévole et les bloqueurs de publication. L'affectation manuelle applique les mêmes contraintes dures et répond 412 avec la raison lisible.
+- Autorisation : tout sous `volunteers.schedule` au périmètre événement ; routes publiques `/missions*` sous jeton candidat (404 uniforme). Les motivations internes (notes de version, demandes) ne sortent pas des routes organisateur.
 
 ## 8. Sécurité (fondation)
 

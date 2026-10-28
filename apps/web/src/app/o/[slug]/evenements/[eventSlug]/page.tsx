@@ -220,8 +220,8 @@ export default async function EventPilotPage({
               </StatGrid>
               <p className="mt-3 text-[13px]">
                 Recrutement : <b>{volunteering.recruitmentStatus === "open" ? "ouvert" : "fermé"}</b> ·{" "}
-                {volunteering.positions.filter((p) => p.status === "active").length} poste(s) activé(s). Le planning
-                (proposition automatique, arbitrage, publication) arrive à la phase suivante.
+                {volunteering.positions.filter((p) => p.status === "active").length} poste(s) activé(s). Le planning se
+                propose, s'arbitre et se publie depuis sa page.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button asChild size="sm" variant="secondary">
@@ -230,6 +230,9 @@ export default async function EventPilotPage({
                 <Button asChild size="sm" variant="ghost">
                   <Link href={`/o/${slug}/benevoles?evenement=${event.id}`}>Candidatures</Link>
                 </Button>
+                <Button asChild size="sm" variant="ghost">
+                  <Link href={`/o/${slug}/evenements/${event.slug}/planning`}>Planning</Link>
+                </Button>
               </div>
             </Panel>
           ) : (
@@ -237,7 +240,8 @@ export default async function EventPilotPage({
               <PanelTitle>Prochaines étapes</PanelTitle>
               <ul className="m-0 list-none space-y-2 p-0 text-[13px]">
                 <li className="text-muted">
-                  <b className="text-ink">Planning bénévole</b> — proposition automatique et publication (phase 6).
+                  <b className="text-ink">Planning bénévole</b> — accessible aux responsables bénévoles depuis la page
+                  Planning.
                 </li>
               </ul>
             </Panel>

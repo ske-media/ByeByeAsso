@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   ConfirmDialog,
+  EmptyState,
   FormField,
   Table,
   TableContainer,
@@ -42,11 +43,13 @@ export function ApplicationsTable({
   slug,
   rows,
   showEvent,
+  emptyDescription,
 }: {
   organizationId: string;
   slug: string;
   rows: ApplicationRow[];
   showEvent: boolean;
+  emptyDescription: string;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<string[]>([]);
@@ -154,73 +157,77 @@ export function ApplicationsTable({
           </button>
         </div>
       ) : null}
-      <TableContainer label="Candidatures" className="border-0 bg-transparent">
-        <Table>
-          <THead>
-            <TR>
-              <TH>
-                <input
-                  type="checkbox"
-                  aria-label="Tout sélectionner"
-                  className="size-4 accent-ink"
-                  checked={selected.length === all.length && all.length > 0}
-                  onChange={(e) => setSelected(e.target.checked ? all : [])}
-                />
-              </TH>
-              <TH>Candidat·e</TH>
-              {showEvent ? <TH>Événement</TH> : null}
-              <TH>1er vœu</TH>
-              <TH>Compétences</TH>
-              <TH>Dispo.</TH>
-              <TH>Statut</TH>
-              <TH>
-                <span className="k-sr-only">Actions</span>
-              </TH>
-            </TR>
-          </THead>
-          <TBody>
-            {rows.map((r) => (
-              <TR key={r.id}>
-                <TD>
+      {rows.length === 0 ? (
+        <EmptyState title="Aucune candidature" description={emptyDescription} />
+      ) : (
+        <TableContainer label="Candidatures" className="border-0 bg-transparent">
+          <Table>
+            <THead>
+              <TR>
+                <TH>
                   <input
                     type="checkbox"
-                    aria-label={`Sélectionner ${r.name}`}
+                    aria-label="Tout sélectionner"
                     className="size-4 accent-ink"
-                    checked={selected.includes(r.id)}
-                    onChange={() => toggle(r.id)}
+                    checked={selected.length === all.length && all.length > 0}
+                    onChange={(e) => setSelected(e.target.checked ? all : [])}
                   />
-                </TD>
-                <TD>
-                  <b>{r.name}</b>
-                  <span className="block text-[11px] text-muted">
-                    {r.email} · {r.number} · {r.receivedLabel}
-                  </span>
-                </TD>
-                {showEvent ? <TD>{r.eventTitle}</TD> : null}
-                <TD>{r.firstChoice ?? "—"}</TD>
-                <TD>
-                  {r.skillsCount}
-                  {r.verifiedSkillsCount > 0 ? (
-                    <span className="text-[11px] text-muted"> ({r.verifiedSkillsCount} vérifiée(s))</span>
-                  ) : null}
-                </TD>
-                <TD>{r.effectiveHours} h</TD>
-                <TD>
-                  <Badge tone={APPLICATION_STATUS_TONE[r.status]}>{APPLICATION_STATUS_LABELS[r.status]}</Badge>
-                </TD>
-                <TD className="text-right">
-                  <Link
-                    href={`/o/${slug}/benevoles/candidatures/${r.id}`}
-                    className="font-bold underline underline-offset-4"
-                  >
-                    Examiner →
-                  </Link>
-                </TD>
+                </TH>
+                <TH>Candidat·e</TH>
+                {showEvent ? <TH>Événement</TH> : null}
+                <TH>1er vœu</TH>
+                <TH>Compétences</TH>
+                <TH>Dispo.</TH>
+                <TH>Statut</TH>
+                <TH>
+                  <span className="k-sr-only">Actions</span>
+                </TH>
               </TR>
-            ))}
-          </TBody>
-        </Table>
-      </TableContainer>
+            </THead>
+            <TBody>
+              {rows.map((r) => (
+                <TR key={r.id}>
+                  <TD>
+                    <input
+                      type="checkbox"
+                      aria-label={`Sélectionner ${r.name}`}
+                      className="size-4 accent-ink"
+                      checked={selected.includes(r.id)}
+                      onChange={() => toggle(r.id)}
+                    />
+                  </TD>
+                  <TD>
+                    <b>{r.name}</b>
+                    <span className="block text-[11px] text-muted">
+                      {r.email} · {r.number} · {r.receivedLabel}
+                    </span>
+                  </TD>
+                  {showEvent ? <TD>{r.eventTitle}</TD> : null}
+                  <TD>{r.firstChoice ?? "—"}</TD>
+                  <TD>
+                    {r.skillsCount}
+                    {r.verifiedSkillsCount > 0 ? (
+                      <span className="text-[11px] text-muted"> ({r.verifiedSkillsCount} vérifiée(s))</span>
+                    ) : null}
+                  </TD>
+                  <TD>{r.effectiveHours} h</TD>
+                  <TD>
+                    <Badge tone={APPLICATION_STATUS_TONE[r.status]}>{APPLICATION_STATUS_LABELS[r.status]}</Badge>
+                  </TD>
+                  <TD className="text-right">
+                    <Link
+                      href={`/o/${slug}/benevoles/candidatures/${r.id}`}
+                      className="font-bold underline underline-offset-4"
+                    >
+                      Examiner →
+                    </Link>
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableContainer>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.5.0-phase5
+  version: 0.6.0-phase6
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -29,6 +29,12 @@ info:
     `/public/volunteer-applications/*` sont authentifiées par le jeton candidat (`?k=` ou Bearer), renvoyé UNE fois ;
     erreurs d'accès en 404 uniforme. Les notes internes ne sortent jamais des routes organisateur ; une déclaration
     de binôme ne révèle jamais si l'autre personne a candidaté.
+
+    Planning (phase 6) : versions de planning par événement (`V1`, `V2`…) sous `volunteers.schedule`.
+    Le moteur (`kroov-greedy-ls/1`, déterministe, journalisé dans `schedule-runs`) ne produit qu'une PROPOSITION ;
+    seule la publication humaine (`POST …/publish`, jeton `expectedVersion`, 409 `stale_version`, 412 `conflicts` /
+    `unfilled` / `version_immutable`) fait foi et notifie uniquement les bénévoles dont les missions changent.
+    Les routes `/public/volunteer-applications/{id}/missions*` sont authentifiées par le jeton candidat.
 
     Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
     Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
@@ -975,6 +981,223 @@ components:
         toReview: { type: integer }
         waitlisted: { type: integer }
         requiredTotal: { type: integer, description: "affectations à couvrir (≠ personnes)" }
+    ScheduleVersion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        number: { type: integer }
+        label: { type: string, example: V2 }
+        status:
+          { type: string, enum: [draft, generating, proposed, generation_failed, under_review, published, superseded] }
+        basedOnVersionId: { type: [string, "null"], format: uuid }
+        notes: { type: [string, "null"] }
+        unfilledAcknowledged: { type: boolean }
+        publishedAt: { type: [string, "null"], format: date-time }
+        supersededAt: { type: [string, "null"], format: date-time }
+        version: { type: integer, description: "jeton de concurrence optimiste (publication)" }
+        createdAt: { type: string, format: date-time }
+    ScheduleRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        versionId: { type: string, format: uuid }
+        algorithmVersion: { type: string, example: kroov-greedy-ls/1 }
+        inputHash: { type: string, description: "SHA-256 de l'instantané d'entrée (rejouable)" }
+        status: { type: string, enum: [running, succeeded, failed] }
+        solverStatus: { type: [string, "null"], enum: [complete, partial, infeasible, null] }
+        coveredCount: { type: [integer, "null"] }
+        unfilledCount: { type: [integer, "null"] }
+        score: { type: [number, "null"] }
+        weights: { $ref: "#/components/schemas/EngineWeights" }
+        scope:
+          {
+            type: [array, "null"],
+            items: { type: string, format: uuid },
+            description: "créneaux régénérés (null = tous)",
+          }
+        diagnostics:
+          type: object
+          properties:
+            unfilled: { type: array, items: { $ref: "#/components/schemas/UnfilledShift" } }
+            invalidLocks: { type: array, items: { type: object } }
+            iterations: { type: integer }
+        durationMs: { type: [integer, "null"] }
+        error: { type: [string, "null"] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+    EngineWeights:
+      type: object
+      description: "Pondérations des critères souples (lexicographiques après la couverture)"
+      properties:
+        preference: { type: number, default: 10 }
+        timeFit: { type: number, default: 2 }
+        buddy: { type: number, default: 4 }
+        fairness: { type: number, default: 3 }
+        optionalSkill: { type: number, default: 1 }
+    UnfilledShift:
+      type: object
+      properties:
+        shiftId: { type: string, format: uuid }
+        positionName: { type: string }
+        missing: { type: integer }
+        reasons:
+          type: array
+          description: "Pourquoi chaque candidat·e écarté·e ne convient pas (libellés français)"
+          items:
+            type: object
+            properties:
+              reason:
+                {
+                  type: string,
+                  enum:
+                    [
+                      not_available,
+                      missing_skill,
+                      unverified_skill,
+                      too_young,
+                      overlap,
+                      rest_too_short,
+                      max_hours,
+                      shift_full,
+                      not_eligible,
+                    ],
+                }
+              label: { type: string }
+              count: { type: integer }
+    Assignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        shiftId: { type: string, format: uuid }
+        applicationId: { type: string, format: uuid }
+        volunteer: { type: object, properties: { firstName: { type: string }, lastName: { type: string } } }
+        source: { type: string, enum: [auto, manual] }
+        locked: { type: boolean }
+        confirmationStatus: { type: string, enum: [pending, confirmed, declined] }
+        confirmedAt: { type: [string, "null"], format: date-time }
+        notifiedAt: { type: [string, "null"], format: date-time }
+        attendance: { type: [string, "null"], enum: [present, absent, late, excused, null] }
+        conflicts:
+          type: array
+          description: "Contraintes dures violées sur les DONNÉES ACTUELLES (bloquent la publication)"
+          items: { type: object, properties: { reason: { type: string }, label: { type: string } } }
+    VersionDetail:
+      type: object
+      properties:
+        version: { $ref: "#/components/schemas/ScheduleVersion" }
+        shifts:
+          type: array
+          items:
+            type: object
+            properties:
+              shift: { $ref: "#/components/schemas/VolunteerShift" }
+              assignments: { type: array, items: { $ref: "#/components/schemas/Assignment" } }
+              candidates:
+                type: array
+                description: "Bénévoles acceptés affectables sur ce créneau"
+                items: { type: object, properties: { applicationId: { type: string }, label: { type: string } } }
+              excluded:
+                type: array
+                description: "Bénévoles non affectables et pourquoi (explicabilité)"
+                items:
+                  {
+                    type: object,
+                    properties: { applicationId: { type: string }, label: { type: string }, reason: { type: string } },
+                  }
+        unfilled: { type: array, items: { $ref: "#/components/schemas/UnfilledShift" } }
+        invalidLocks: { type: array, items: { type: object } }
+        volunteers:
+          type: array
+          items:
+            type: object
+            properties:
+              applicationId: { type: string, format: uuid }
+              name: { type: string }
+              missions: { type: integer }
+              hours: { type: number }
+        openRequests: { type: integer }
+        lastRun: { oneOf: [{ $ref: "#/components/schemas/ScheduleRun" }, { type: "null" }] }
+        canPublish: { type: boolean }
+        publishBlockers: { type: array, items: { type: string } }
+    VersionDiff:
+      type: object
+      description: "Différences entre deux versions (ajouts, retraits, déplacements) par bénévole"
+      properties:
+        againstVersionId: { type: [string, "null"], format: uuid }
+        added: { type: array, items: { $ref: "#/components/schemas/MissionChange" } }
+        removed: { type: array, items: { $ref: "#/components/schemas/MissionChange" } }
+        unchanged: { type: integer }
+    MissionChange:
+      type: object
+      properties:
+        applicationId: { type: string, format: uuid }
+        volunteerName: { type: string }
+        shiftId: { type: string, format: uuid }
+        positionName: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+    PublishInput:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, description: "valeur `version` lue — 409 stale_version sinon" }
+        acknowledgeUnfilled:
+          {
+            type: boolean,
+            default: false,
+            description: "obligatoire si des besoins restent non pourvus (412 unfilled)",
+          }
+        notes: { type: string, maxLength: 2000 }
+    AssignmentRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        kind: { type: string, enum: [unavailable] }
+        message: { type: [string, "null"] }
+        status: { type: string, enum: [open, resolved, dismissed] }
+        resolution: { type: [string, "null"] }
+        volunteer: { type: object, properties: { firstName: { type: string }, lastName: { type: string } } }
+        shift: { $ref: "#/components/schemas/VolunteerShift" }
+        createdAt: { type: string, format: date-time }
+        resolvedAt: { type: [string, "null"], format: date-time }
+    Mission:
+      type: object
+      description: "Vue bénévole d'une affectation PUBLIÉE (jamais une proposition)"
+      properties:
+        assignmentId: { type: string, format: uuid }
+        positionName: { type: string }
+        teamName: { type: [string, "null"] }
+        location: { type: [string, "null"] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        confirmationStatus: { type: string, enum: [pending, confirmed, declined] }
+        openRequest: { type: boolean }
+        scheduleLabel: { type: string, example: V2 }
+    AttendanceInput:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [present, absent, late, excused] }
+        note: { type: string, maxLength: 500 }
+    PlanningOverview:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              eventId: { type: string, format: uuid }
+              title: { type: string }
+              startsAt: { type: string, format: date-time }
+              publishedVersion: { oneOf: [{ $ref: "#/components/schemas/ScheduleVersion" }, { type: "null" }] }
+              workingVersion: { oneOf: [{ $ref: "#/components/schemas/ScheduleVersion" }, { type: "null" }] }
+              requiredTotal: { type: integer }
+              coveredCount: { type: integer }
+              openRequests: { type: integer }
+              pendingConfirmations: { type: integer }
   responses:
     Unauthenticated:
       {
@@ -2771,6 +2994,332 @@ paths:
         "200": { description: Retirée }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: Déjà close }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Versions de planning de l'événement (volunteers.schedule)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { versions: { type: array, items: { $ref: "#/components/schemas/ScheduleVersion" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Créer une version de travail (optionnellement à partir d'une autre)
+      description: Numérotée `V(n+1)` ; `basedOnVersionId` copie les affectations de la version source (verrous conservés).
+      requestBody:
+        {
+          required: false,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      properties:
+                        { basedOnVersionId: { type: string, format: uuid }, notes: { type: string, maxLength: 2000 } },
+                    },
+                },
+            },
+        }
+      responses:
+        "201":
+          {
+            description: Créée,
+            content: { application/json: { schema: { $ref: "#/components/schemas/ScheduleVersion" } } },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail d'une version (créneaux, affectations, candidats, exclusions expliquées, conflits, charge)
+      responses:
+        "200":
+          { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/VersionDetail" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/generate:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Lancer le moteur sur la version (proposition, jamais publication)
+      description: |
+        Remplace les affectations NON verrouillées des créneaux visés (`shiftIds` = régénération partielle ;
+        absent = tout l'événement). Chaque exécution est journalisée (`schedule-runs`) avec l'instantané d'entrée
+        et son empreinte. Version requise en `draft` / `proposed` / `generation_failed` / `under_review`
+        (412 `version_immutable` sinon).
+      requestBody:
+        {
+          required: false,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      properties:
+                        {
+                          shiftIds: { type: array, items: { type: string, format: uuid } },
+                          weights: { $ref: "#/components/schemas/EngineWeights" },
+                        },
+                    },
+                },
+            },
+        }
+      responses:
+        "200":
+          description: Proposition produite
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { $ref: "#/components/schemas/ScheduleVersion" }
+                  run: { $ref: "#/components/schemas/ScheduleRun" }
+        "412": { description: version_immutable }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/diff:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      - {
+          name: against,
+          in: query,
+          required: false,
+          schema: { type: string, format: uuid },
+          description: "version de comparaison (défaut : version publiée)",
+        }
+    get:
+      summary: Différences avec une autre version (ce qui changerait pour chaque bénévole)
+      responses:
+        "200":
+          { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/VersionDiff" } } } }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/review:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Passer la version en arbitrage (proposed → under_review)
+      responses:
+        "200": { description: OK }
+        "409": { description: invalid_transition }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/publish:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Publier la version (décision humaine, transactionnelle)
+      description: |
+        Sous verrou de l'événement : revalide chaque affectation sur les DONNÉES ACTUELLES (412 `conflicts` +
+        `details.conflicts`), exige `acknowledgeUnfilled` si des besoins restent non pourvus (412 `unfilled`),
+        vérifie `expectedVersion` (409 `stale_version`), remplace la version publiée précédente (`superseded`),
+        passe les candidatures en `assigned`, conserve les confirmations des missions inchangées et n'envoie
+        un e-mail qu'aux bénévoles dont les missions changent (lignes NOUVEAU / RETIRÉ). Deux publications
+        concurrentes : une seule aboutit.
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PublishInput" } } } }
+      responses:
+        "200":
+          description: Publiée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { $ref: "#/components/schemas/ScheduleVersion" }
+                  supersededVersionId: { type: [string, "null"], format: uuid }
+                  notified: { type: integer }
+                  changes: { type: integer }
+        "409": { $ref: "#/components/responses/StaleVersion" }
+        "412": { description: "conflicts · unfilled · version_immutable" }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/assignments:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Affecter manuellement (contraintes dures vérifiées, 412 avec la raison lisible)
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [shiftId, applicationId],
+                      properties:
+                        {
+                          shiftId: { type: string, format: uuid },
+                          applicationId: { type: string, format: uuid },
+                          lock: { type: boolean, default: false },
+                        },
+                    },
+                },
+            },
+        }
+      responses:
+        "201":
+          {
+            description: Affectée,
+            content: { application/json: { schema: { $ref: "#/components/schemas/Assignment" } } },
+          }
+        "409": { description: Déjà affecté·e sur ce créneau }
+        "412": { description: "Contrainte dure violée (`details.reason`, libellé) ou version immuable" }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/assignments/{assignmentId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      summary: Retirer une affectation de la version de travail
+      responses:
+        "200": { description: Retirée }
+        "412": { description: version_immutable }
+  /organizations/{organizationId}/events/{eventId}/schedule-versions/{versionId}/assignments/{assignmentId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [lock, unlock] } }
+    post:
+      summary: Verrouiller / déverrouiller (un verrou est conservé par les régénérations s'il reste valide)
+      responses:
+        "200": { description: OK }
+  /organizations/{organizationId}/events/{eventId}/schedule-runs:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Journal des exécutions du moteur (traçabilité)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                {
+                  type: object,
+                  properties: { runs: { type: array, items: { $ref: "#/components/schemas/ScheduleRun" } } },
+                }
+  /organizations/{organizationId}/events/{eventId}/schedule-runs/{runId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: runId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail d'une exécution (instantané d'entrée, diagnostics)
+      responses:
+        "200":
+          { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ScheduleRun" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /organizations/{organizationId}/events/{eventId}/assignment-requests:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: status, in: query, required: false, schema: { type: string, enum: [open, all], default: open } }
+    get:
+      summary: Demandes d'arbitrage (indisponibilités signalées après publication)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                {
+                  type: object,
+                  properties: { requests: { type: array, items: { $ref: "#/components/schemas/AssignmentRequest" } } },
+                }
+  /organizations/{organizationId}/events/{eventId}/assignment-requests/{requestId}/{action}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [resolve, dismiss] } }
+    post:
+      summary: Traiter (resolve) ou écarter (dismiss) une demande — la mission n'est jamais retirée automatiquement
+      requestBody:
+        {
+          required: false,
+          content:
+            {
+              application/json:
+                { schema: { type: object, properties: { resolution: { type: string, maxLength: 1000 } } } },
+            },
+        }
+      responses:
+        "200": { description: OK }
+        "409": { description: Déjà traitée }
+  /organizations/{organizationId}/events/{eventId}/attendance/{assignmentId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      summary: Pointer la présence (version publiée uniquement ; volunteers.schedule ou checkins.scan)
+      requestBody:
+        { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AttendanceInput" } } } }
+      responses:
+        "200": { description: Enregistrée }
+        "412": { description: Affectation hors version publiée }
+  /public/volunteer-applications/{applicationId}/missions:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: k, in: query, required: true, schema: { type: string } }
+    get:
+      summary: Mes missions (version publiée uniquement)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                {
+                  type: object,
+                  properties: { missions: { type: array, items: { $ref: "#/components/schemas/Mission" } } },
+                }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/volunteer-applications/{applicationId}/missions/{assignmentId}/{action}:
+    parameters:
+      - { name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: action, in: path, required: true, schema: { type: string, enum: [confirm, report-unavailable] } }
+      - { name: k, in: query, required: true, schema: { type: string } }
+    post:
+      summary: Confirmer une mission, ou signaler une indisponibilité (ouvre une demande d'arbitrage ; la mission reste)
+      security: []
+      requestBody:
+        {
+          required: false,
+          content:
+            {
+              application/json:
+                { schema: { type: object, properties: { message: { type: string, maxLength: 1000 } } } },
+            },
+        }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Une demande est déjà ouverte }
   /payments/webhooks/{provider}:
     parameters:
       - { name: provider, in: path, required: true, schema: { type: string, enum: [stripe, fake] } }

@@ -43,6 +43,13 @@
       "when": 1793192079681,
       "tag": "0005_volunteers",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793195657232,
+      "tag": "0006_scheduling",
+      "breakpoints": true
     }
   ]
 }

@@ -102,9 +102,14 @@ export default async function EventVolunteeringPage({
           </span>
         }
         actions={
-          <Button asChild variant="secondary">
-            <Link href={`/o/${slug}/benevoles?evenement=${event.id}`}>Candidatures →</Link>
-          </Button>
+          <span className="flex flex-wrap gap-2">
+            <Button asChild variant="secondary">
+              <Link href={`/o/${slug}/benevoles?evenement=${event.id}`}>Candidatures</Link>
+            </Button>
+            <Button asChild variant="primary">
+              <Link href={`/o/${slug}/evenements/${event.slug}/planning`}>Planning →</Link>
+            </Button>
+          </span>
         }
       />
       <StatGrid>
@@ -171,7 +176,7 @@ export default async function EventVolunteeringPage({
             <PanelTitle>Matrice de disponibilité</PanelTitle>
             <p className="text-[12px] text-muted">
               Bénévoles acceptés (et en liste d'attente, en italique) × créneaux. ✓ disponible sur tout le créneau, ◐ en
-              partie, — indisponible. Le planning (phase suivante) n'affecte que les ✓.
+              partie, — indisponible. Le planning n'affecte que les ✓.
             </p>
             {matrix.shifts.length === 0 || matrix.volunteers.length === 0 ? (
               <p className="mt-2 text-[13px] text-muted">

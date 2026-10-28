@@ -7,6 +7,7 @@ import {
   wallClockDateString,
   wallClockTimeString,
 } from "@kroov/domain/kernel";
+import { listMissions } from "@kroov/domain/scheduling";
 import {
   getApplicationForCandidate,
   getPublicVolunteering,
@@ -20,6 +21,7 @@ import { AppPublicShell } from "@/components/public-shell";
 import { currentSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { ticketingContext } from "@/lib/ticketing";
+import { Missions } from "./missions";
 import { TrackingActions } from "./tracking-actions";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +63,13 @@ export default async function TrackingPage({
   const tz = a.event.timezone;
   const when = (d: Date) => `${formatDateFr(d, tz)}, ${formatTimeFr(d, tz)}`;
   const volunteering = a.editable ? await getPublicVolunteering(db(), a.organizationId, a.event.id) : null;
+  const missions = ["assigned", "confirmed"].includes(a.status)
+    ? await listMissions(db(), a.id, {
+        accessToken: sp.k ?? null,
+        actor: session?.actor,
+        email: session?.user.emailVerified ? session.user.email : undefined,
+      })
+    : [];
   const copy: Record<string, string> = {
     submitted: "Votre candidature est bien reçue. L'équipe l'examine et vous écrira dès sa décision.",
     under_review: "L'équipe étudie votre candidature. Vous pouvez encore compléter vos disponibilités.",
@@ -69,8 +78,8 @@ export default async function TrackingPage({
     waitlisted:
       "Vous êtes en liste d'attente : les postes demandés sont déjà pourvus. Élargir vos vœux ou vos disponibilités augmente vos chances.",
     rejected: "Votre candidature n'a pas été retenue cette fois-ci.",
-    assigned: "Une mission vous est proposée : consultez-la ci-dessous.",
-    confirmed: "Mission confirmée. Merci !",
+    assigned: "Le planning est publié : vos missions sont ci-dessous, merci de les confirmer.",
+    confirmed: "Missions confirmées. Merci ! Le planning qui fait foi est ci-dessous.",
     withdrawn: "Vous avez retiré votre candidature.",
   };
   const wall = (d: Date) => {
@@ -123,6 +132,22 @@ export default async function TrackingPage({
           {a.decisionReason ? <p className="mt-1 text-[12px] text-muted">Motif : {a.decisionReason}</p> : null}
         </Panel>
 
+        <Missions
+          applicationId={a.id}
+          accessToken={a.accessToken}
+          missions={missions.map((m) => ({
+            assignmentId: m.assignmentId,
+            versionLabel: m.versionLabel,
+            positionName: m.positionName,
+            teamName: m.teamName,
+            label: m.label,
+            briefing: m.briefing,
+            instructions: m.instructions,
+            rangeLabel: formatRangeFr(m.startsAt, m.endsAt, tz),
+            confirmationStatus: m.confirmationStatus,
+            openRequest: m.openRequest !== null,
+          }))}
+        />
         <Panel className="mt-4">
           <h2 className="text-panel-title font-bold">Mes vœux</h2>
           <ol className="m-0 mt-1 list-none p-0 text-[13px]">

@@ -32,6 +32,9 @@ export default async function OrganizationLayout({
         volunteers:
           ctx.can("volunteers.review") ||
           [...ctx.member.eventPermissions.values()].some((p) => p.has("volunteers.review")),
+        planning:
+          ctx.can("volunteers.review") ||
+          [...ctx.member.eventPermissions.values()].some((p) => p.has("volunteers.review")),
         team: ctx.can("organization.read"),
         settings: ctx.can("organization.manage"),
       }}

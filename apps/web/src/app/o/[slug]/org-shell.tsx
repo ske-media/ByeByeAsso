@@ -18,6 +18,7 @@ export interface OrgNavProps {
     ticketing: boolean;
     memberships: boolean;
     volunteers: boolean;
+    planning: boolean;
     team: boolean;
     settings: boolean;
   };
@@ -82,6 +83,16 @@ export function OrgShell({
           },
         ]
       : []),
+    ...(sections.planning
+      ? [
+          {
+            href: `${base}/planning`,
+            label: "Planning",
+            icon: "▦",
+            active: pathname.startsWith(`${base}/planning`) || pathname.includes("/planning"),
+          },
+        ]
+      : []),
     ...(sections.team
       ? [
           {
@@ -126,7 +137,9 @@ export function OrgShell({
                 ? "Adhésions"
                 : crumbs[0] === "benevoles"
                   ? "Bénévoles"
-                  : "Vue d'ensemble";
+                  : crumbs[0] === "planning"
+                    ? "Planning"
+                    : "Vue d'ensemble";
 
   return (
     <OrganizationShell
