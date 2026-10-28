@@ -39,7 +39,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
         title="Réglages de l'organisation"
         description="Identité, fuseau et coordonnées. Chaque modification est tracée."
       />
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <Panel>
           <PanelTitle>Identité</PanelTitle>
           <SettingsForm organization={ctx.organization} />

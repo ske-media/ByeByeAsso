@@ -178,3 +178,181 @@ describeLive("S3. invitations and owner protection by API", () => {
     ).toBe(403);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Phase 2 — events, locations, public pages
+// ---------------------------------------------------------------------------------------------
+type EventJson = { id: string; slug: string; status: string; version: number };
+const inDays = (days: number, hour: number) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  d.setUTCHours(hour, 0, 0, 0);
+  return d.toISOString();
+};
+
+describeLive("S4. events — tenant isolation, scoped grants and public exposure", () => {
+  let eventA: EventJson; // draft in A (complete enough to publish)
+  let eventA2: EventJson; // second draft in A (used for scoped grant)
+  let eventB: EventJson; // draft in B
+  let locationA: { id: string };
+  let dave: ApiClient; // event-scoped manager of A on eventA2 only
+
+  beforeAll(async () => {
+    const loc = await alice.post(`/api/v1/organizations/${orgA.id}/locations`, {
+      name: "Hangar des Nuits",
+      city: "Paris",
+      addressLine1: "12 quai des Docks",
+      postalCode: "75019",
+    });
+    expect(loc.status).toBe(201);
+    locationA = (loc.json as { data: { id: string } }).data;
+    const payload = {
+      title: `Nuit Sécurité ${run}`,
+      description: "Une soirée pensée pour vérifier que personne ne voit ce qu'il ne doit pas voir.",
+      startsAt: inDays(10, 20),
+      endsAt: inDays(11, 2),
+      capacity: 300,
+      locationId: locationA.id,
+    };
+    const a = await alice.post(`/api/v1/organizations/${orgA.id}/events`, payload);
+    expect(a.status).toBe(201);
+    eventA = (a.json as { data: EventJson }).data;
+    const a2 = await alice.post(`/api/v1/organizations/${orgA.id}/events`, { ...payload, title: `Autre nuit ${run}` });
+    eventA2 = (a2.json as { data: EventJson }).data;
+    const b = await bob.post(`/api/v1/organizations/${orgB.id}/events`, {
+      title: `Secret de B ${run}`,
+      startsAt: inDays(5, 19),
+      endsAt: inDays(5, 23),
+    });
+    expect(b.status).toBe(201);
+    eventB = (b.json as { data: EventJson }).data;
+
+    // Dave: invited by Alice as event_manager scoped to eventA2 only.
+    const daveEmail = `dave-${run}@sec.kroov.local`;
+    dave = await signedInClient(baseUrl!, outbox, { name: "Dave D", email: daveEmail, password });
+    const inv = await alice.post(`/api/v1/organizations/${orgA.id}/invitations`, {
+      email: daveEmail,
+      role: "event_manager",
+      eventId: eventA2.id,
+    });
+    expect(inv.status).toBe(201);
+    const link = lastEmailLink(outbox, daveEmail, /https?:\/\/\S+\/invitation\/[A-Za-z0-9_-]+/);
+    expect((await dave.post(`/api/v1/invitations/${link.split("/invitation/")[1]!}/accept`)).status).toBe(200);
+  }, 60_000);
+
+  it("A cannot read, list, update, publish, cancel or delete B's events (forged ids)", async () => {
+    expect((await alice.get(`/api/v1/organizations/${orgB.id}/events`)).status).toBe(403);
+    expect((await alice.get(`/api/v1/organizations/${orgB.id}/events/${eventB.id}`)).status).toBe(404);
+    expect(
+      (await alice.patch(`/api/v1/organizations/${orgB.id}/events/${eventB.id}`, { version: 1, title: "Pwn" })).status,
+    ).toBe(403);
+    expect(
+      (await alice.post(`/api/v1/organizations/${orgB.id}/events/${eventB.id}/publish`, { version: 1 })).status,
+    ).toBe(403);
+    expect(
+      (
+        await alice.post(`/api/v1/organizations/${orgB.id}/events/${eventB.id}/cancel`, {
+          version: 1,
+          reason: "Parce que",
+        })
+      ).status,
+    ).toBe(403);
+    expect((await alice.delete(`/api/v1/organizations/${orgB.id}/events/${eventB.id}`)).status).toBe(403);
+    expect((await alice.post(`/api/v1/organizations/${orgB.id}/locations`, { name: "X", city: "Y" })).status).toBe(403);
+    // B's event id addressed under A (composite tenant scope): not found, nothing changed.
+    expect((await alice.get(`/api/v1/organizations/${orgA.id}/events/${eventB.id}`)).status).toBe(404);
+    expect(
+      (await alice.patch(`/api/v1/organizations/${orgA.id}/events/${eventB.id}`, { version: 1, title: "Pwn" })).status,
+    ).toBe(404);
+    const still = await bob.get(`/api/v1/organizations/${orgB.id}/events/${eventB.id}`);
+    expect((still.json as { data: EventJson }).data.status).toBe("draft");
+  });
+
+  it("a location of B cannot be attached to an event of A", async () => {
+    const locB = await bob.post(`/api/v1/organizations/${orgB.id}/locations`, { name: "Salle B", city: "Lyon" });
+    const res = await alice.patch(`/api/v1/organizations/${orgA.id}/events/${eventA.id}`, {
+      version: eventA.version,
+      locationId: (locB.json as { data: { id: string } }).data.id,
+    });
+    expect([404, 409, 422]).toContain(res.status);
+    const after = await alice.get(`/api/v1/organizations/${orgA.id}/events/${eventA.id}`);
+    expect((after.json as { data: { location: { id: string } | null } }).data.location?.id).toBe(locationA.id);
+  });
+
+  it("an event-scoped manager sees and acts on their event only", async () => {
+    const list = await dave.get(`/api/v1/organizations/${orgA.id}/events?status=all`);
+    expect(list.status).toBe(200);
+    expect((list.json as { data: EventJson[] }).data.map((e) => e.id)).toEqual([eventA2.id]);
+    expect((await dave.get(`/api/v1/organizations/${orgA.id}/events/${eventA.id}`)).status).toBe(404);
+    expect(
+      (await dave.patch(`/api/v1/organizations/${orgA.id}/events/${eventA.id}`, { version: 1, title: "Nope" })).status,
+    ).toBe(403);
+    expect(
+      (await dave.post(`/api/v1/organizations/${orgA.id}/events/${eventA.id}/publish`, { version: 1 })).status,
+    ).toBe(403);
+    // No events.create at organization level, no team reads.
+    expect(
+      (
+        await dave.post(`/api/v1/organizations/${orgA.id}/events`, {
+          title: "Nouveau",
+          startsAt: inDays(3, 19),
+          endsAt: inDays(3, 23),
+        })
+      ).status,
+    ).toBe(403);
+    expect((await dave.get(`/api/v1/organizations/${orgA.id}/members`)).status).toBe(403);
+    // But can update their own event.
+    const ok = await dave.patch(`/api/v1/organizations/${orgA.id}/events/${eventA2.id}`, {
+      version: eventA2.version,
+      tagline: "Édité par Dave",
+    });
+    expect(ok.status).toBe(200);
+  });
+
+  it("publication needs the checklist (412), the right permission and the current version (409)", async () => {
+    const incomplete = await alice.post(`/api/v1/organizations/${orgA.id}/events`, {
+      title: `Incomplet ${run}`,
+      startsAt: inDays(4, 19),
+      endsAt: inDays(4, 23),
+    });
+    const inc = (incomplete.json as { data: EventJson }).data;
+    const blocked = await alice.post(`/api/v1/organizations/${orgA.id}/events/${inc.id}/publish`, {
+      version: inc.version,
+    });
+    expect(blocked.status).toBe(412);
+    expect(JSON.stringify(blocked.json)).toContain("publication_blocked");
+    // Stale version on the complete event.
+    expect(
+      (await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventA.id}/publish`, { version: 999 })).status,
+    ).toBe(409);
+    // Bob is organization_admin of A (S3) — admins may publish; a scanner may not. Use Dave's scope as the negative above.
+    const current = await alice.get(`/api/v1/organizations/${orgA.id}/events/${eventA.id}`);
+    const v = (current.json as { data: EventJson }).data.version;
+    const pub = await alice.post(`/api/v1/organizations/${orgA.id}/events/${eventA.id}/publish`, { version: v });
+    expect(pub.status).toBe(200);
+    expect((pub.json as { data: EventJson }).data.status).toBe("published");
+    // A published event can no longer be deleted.
+    expect((await alice.delete(`/api/v1/organizations/${orgA.id}/events/${eventA.id}`)).status).toBe(412);
+  });
+
+  it("public API and pages expose published events only; drafts are 404 and never listed", async () => {
+    const anon = new ApiClient(baseUrl!);
+    const org = await anon.get(`/api/v1/public/organizations/${orgA.slug}`);
+    expect(org.status).toBe(200);
+    const slugs = (org.json as { data: { events: Array<{ slug: string }> } }).data.events.map((e) => e.slug);
+    expect(slugs).toContain(eventA.slug);
+    expect(slugs).not.toContain(eventA2.slug);
+    expect((await anon.get(`/api/v1/public/organizations/${orgA.slug}/events/${eventA.slug}`)).status).toBe(200);
+    expect((await anon.get(`/api/v1/public/organizations/${orgA.slug}/events/${eventA2.slug}`)).status).toBe(404);
+    expect((await anon.get(`/api/v1/public/organizations/${orgB.slug}/events/${eventB.slug}`)).status).toBe(404);
+    // Cross-organization slug confusion: A's event slug under B's organization is 404.
+    expect((await anon.get(`/api/v1/public/organizations/${orgB.slug}/events/${eventA.slug}`)).status).toBe(404);
+    // HTML pages follow the same rule.
+    expect((await anon.get(`/${orgA.slug}/${eventA.slug}`)).status).toBe(200);
+    expect((await anon.get(`/${orgA.slug}/${eventA2.slug}`)).status).toBe(404);
+    const publicJson = JSON.stringify(
+      (await anon.get(`/api/v1/public/organizations/${orgA.slug}/events/${eventA.slug}`)).json,
+    );
+    expect(publicJson).not.toMatch(/organizationId|"version"|createdBy|publishedBy/);
+  });
+});

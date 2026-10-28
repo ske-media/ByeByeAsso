@@ -15,6 +15,13 @@
       "when": 1793143240743,
       "tag": "0001_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793145509529,
+      "tag": "0002_events",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@ import "server-only";
 import type { Permission } from "@kroov/auth";
 import { contextHasPermission, loadMemberContext, type MemberContext } from "@kroov/domain/authorization";
 import { NotFoundError } from "@kroov/domain/kernel";
-import { getOrganizationBySlug, listMyOrganizations, type OrganizationDetail } from "@kroov/domain/organizations";
+import { getOrganizationForMember, listMyOrganizations, type OrganizationDetail } from "@kroov/domain/organizations";
 import { notFound } from "next/navigation";
 import { db } from "./db";
 import { requireSession } from "./session";
@@ -17,14 +17,15 @@ export interface OrgPageContext {
 
 /**
  * Load everything an organizer page needs, enforcing: signed in + verified, active member
- * of the organization behind `slug` (404 otherwise — existence is not disclosed).
+ * of the organization behind `slug` (404 otherwise — existence is not disclosed). Members whose
+ * grants are all event-scoped get the shell too; each section then checks its own permission.
  * Permission checks for *actions* still happen in the domain services.
  */
 export async function loadOrgPage(slug: string, pathname: string): Promise<OrgPageContext> {
   const session = await requireSession(pathname);
   let organization: OrganizationDetail;
   try {
-    organization = await getOrganizationBySlug(db(), session.actor, slug);
+    organization = await getOrganizationForMember(db(), session.actor, slug);
   } catch (error) {
     if (error instanceof NotFoundError) notFound();
     throw error;

@@ -111,6 +111,7 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Migrations : `pnpm db:generate` (drizzle-kit, SQL versionné dans `packages/database/migrations`) puis `pnpm db:migrate` (runner idempotent, table `public.drizzle_migrations`). `pnpm db:check` vérifie la cohérence schéma / migrations en CI.
 - Phase 0 (INFRASTRUCTURE) : `idempotency_records`, `outbox_events`, `job_executions`, `feature_flags`.
 - Phase 1 (AUTH + IDENTITY) : tables Better Auth, `user_profiles`, `organizations`, `organization_settings`, `organization_members`, `roles`, `permissions`, `role_permissions`, `member_role_assignments` (FK composite tenant-safe), `organization_invitations`, `audit_logs` ; FK `organization_id` sur les tables infra.
+- Phase 2 (EVENTS) : `event_locations`, `events` (slug unique par organisation, instants `timestamptz` + `timezone`, `version`, statut/visibilité en enums, FK composite vers le lieu), `event_settings`, `stored_files`, `event_media`, `form_definitions`, `form_fields`, `form_submissions`, `form_answers` ; FK composites `(organization_id, event_id)` posées sur `member_role_assignments` et `organization_invitations`.
 - Diagramme ER : `docs/er-diagram.md` (mis à jour à chaque phase).
 
 ## 7. Processus worker
@@ -118,11 +119,22 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - pg-boss démarre dans le schéma `pgboss` de la même base ; files déclarées dans `apps/worker/src/queue.ts` (`QUEUES`), politique commune : 5 tentatives, backoff exponentiel, conservation 7 jours.
 - Relais outbox : `SELECT … FOR UPDATE SKIP LOCKED` par lots de 100, marquage `dispatched`, backoff par ligne, échec définitif après 10 tentatives. Balayage de sûreté chaque minute ; les producteurs déclencheront le relais directement après commit (phase 1).
 - Maintenance : purge horaire des `idempotency_records` expirés, heartbeat chaque minute.
+- Événements (phase 2) : `events.complete-ended` chaque heure — les événements publiés terminés depuis plus de 24 h passent `completed` (acteur `system`, audit + outbox `event.completed`).
 - Arrêt propre sur SIGINT/SIGTERM (`stop({ graceful: true })`, fermeture du pool).
 
 ## 7bis. Autorisation (phase 1)
 
 `requirePermission(db, actor, permission, { organizationId, eventId? })` charge en une requête les attributions de rôle de l'acteur dans l'organisation (membres actifs uniquement) et accorde la permission si une attribution organisation-wide ou une attribution limitée à `eventId` la porte. Deny by default ; les acteurs `system` / `webhook` contournent le RBAC mais restent scoppés par organisation. Les lectures d'organisation par un non-membre renvoient 404 ; les mutations 403. Le dernier propriétaire est protégé dans une transaction avec verrou `FOR UPDATE` sur l'organisation.
+
+## 7ter. Événements (phase 2)
+
+- Domaine `packages/domain/src/events` : `schemas.ts` (Zod, dates en instants ; la conversion heure locale → instant se fait dans `kernel/time.ts`, DST-safe), `state-machine.ts` (machine typée avec gardes nommées), `events.ts` (commandes + lectures organisateur), `locations.ts`, `public.ts` (lectures anonymes, ne renvoient jamais `organizationId` ni `version`).
+- Périmètre : `listEvents` renvoie toute l'organisation si l'acteur porte `events.read` au niveau organisation, sinon uniquement les événements où il a une attribution ; `getEvent` hors périmètre = 404.
+- Publication : check-list (`publicationChecklist`) + garde organisation active, en transaction avec `SELECT … FOR UPDATE` sur l'organisation ; `version` incrémenté à chaque mutation, `409 stale_version` en cas de conflit.
+- Annulation : motif obligatoire, conservé, affiché sur la page publique ; un événement publié ne se supprime jamais (annulation puis archivage).
+- Outbox : `event.published`, `event.cancelled`, `event.completed`, `event.logistics_changed` (dates ou lieu d'un événement publié) — consommés par les notifications des phases suivantes.
+- Coque organisateur : `loadOrgPage` accepte tout membre actif (y compris ceux dont les droits sont limités à des événements) ; chaque section vérifie ensuite sa propre permission. `GET /organizations/{id}` reste réservé à `organization.read`.
+- Pages publiques `/[orgSlug]` et `/[orgSlug]/[eventSlug]` : rendu serveur, `robots` selon la visibilité, 404 pour brouillons / suspendus / archivés / privés ; le CTA billetterie est annoncé mais inactif (aucun faux bouton).
 
 ## 8. Sécurité (fondation)
 

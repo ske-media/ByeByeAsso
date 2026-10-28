@@ -21,7 +21,8 @@
     "./tasks": "./src/tasks/index.ts",
     "./billing": "./src/billing/index.ts",
     "./audit": "./src/audit/index.ts",
-    "./authorization": "./src/authorization/index.ts"
+    "./authorization": "./src/authorization/index.ts",
+    "./outbox": "./src/outbox/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

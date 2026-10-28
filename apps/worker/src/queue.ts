@@ -31,6 +31,7 @@ export const QUEUES = {
   outboxRelay: "outbox.relay",
   maintenanceExpireIdempotency: "maintenance.expire-idempotency",
   maintenanceHeartbeat: "maintenance.heartbeat",
+  eventsComplete: "events.complete-ended",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

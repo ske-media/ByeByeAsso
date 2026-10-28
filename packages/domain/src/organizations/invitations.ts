@@ -34,6 +34,7 @@ export interface InvitationView {
   role: Role;
   roleName: string;
   eventId: string | null;
+  eventTitle: string | null;
   status: "pending" | "accepted" | "revoked" | "expired";
   expiresAt: Date;
   createdAt: Date;
@@ -82,6 +83,7 @@ function toView(row: {
   roleKey: string;
   roleName: string;
   eventId: string | null;
+  eventTitle: string | null;
   status: "pending" | "accepted" | "revoked" | "expired";
   expiresAt: Date;
   createdAt: Date;
@@ -95,6 +97,7 @@ function toView(row: {
     role: row.roleKey as Role,
     roleName: row.roleName,
     eventId: row.eventId,
+    eventTitle: row.eventTitle,
     status: effectiveStatus,
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
@@ -109,6 +112,7 @@ const invitationSelect = {
   roleKey: schema.roles.key,
   roleName: schema.roles.name,
   eventId: schema.organizationInvitations.eventId,
+  eventTitle: schema.events.title,
   status: schema.organizationInvitations.status,
   expiresAt: schema.organizationInvitations.expiresAt,
   createdAt: schema.organizationInvitations.createdAt,
@@ -123,6 +127,7 @@ export async function listInvitations(db: DbExecutor, actor: Actor, organization
     .from(schema.organizationInvitations)
     .innerJoin(schema.roles, eq(schema.roles.id, schema.organizationInvitations.roleId))
     .innerJoin(schema.users, eq(schema.users.id, schema.organizationInvitations.invitedBy))
+    .leftJoin(schema.events, eq(schema.events.id, schema.organizationInvitations.eventId))
     .where(eq(schema.organizationInvitations.organizationId, organizationId))
     .orderBy(desc(schema.organizationInvitations.createdAt))
     .limit(200);
@@ -233,6 +238,7 @@ async function getInvitationView(db: DbExecutor, invitationId: string): Promise<
     .from(schema.organizationInvitations)
     .innerJoin(schema.roles, eq(schema.roles.id, schema.organizationInvitations.roleId))
     .innerJoin(schema.users, eq(schema.users.id, schema.organizationInvitations.invitedBy))
+    .leftJoin(schema.events, eq(schema.events.id, schema.organizationInvitations.eventId))
     .where(eq(schema.organizationInvitations.id, invitationId))
     .limit(1);
   const row = rows[0];
@@ -331,6 +337,8 @@ export async function resendInvitation(
 export interface PublicInvitation {
   organizationName: string;
   roleName: string;
+  /** Title of the event when the invitation is limited to one event; null for organization-wide. */
+  eventTitle: string | null;
   invitedByName: string;
   /** Masked e-mail so the page can say which account is expected without leaking it fully. */
   emailHint: string;
@@ -363,11 +371,13 @@ export async function getInvitationByToken(
       organizationName: schema.organizations.name,
       roleName: schema.roles.name,
       invitedByName: schema.users.name,
+      eventTitle: schema.events.title,
     })
     .from(schema.organizationInvitations)
     .innerJoin(schema.organizations, eq(schema.organizations.id, schema.organizationInvitations.organizationId))
     .innerJoin(schema.roles, eq(schema.roles.id, schema.organizationInvitations.roleId))
     .innerJoin(schema.users, eq(schema.users.id, schema.organizationInvitations.invitedBy))
+    .leftJoin(schema.events, eq(schema.events.id, schema.organizationInvitations.eventId))
     .where(eq(schema.organizationInvitations.tokenHash, tokenHash))
     .limit(1);
   const row = rows[0];
@@ -378,6 +388,7 @@ export async function getInvitationByToken(
   return {
     organizationName: row.organizationName,
     roleName: row.roleName,
+    eventTitle: row.eventTitle,
     invitedByName: row.invitedByName,
     emailHint: maskEmail(row.email),
     email: row.email,

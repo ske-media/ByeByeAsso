@@ -24,7 +24,11 @@ export default async function OrganizationLayout({
       organizationName={ctx.organization.name}
       userName={ctx.session.user.name}
       organizations={ctx.myOrganizations.map((o) => ({ id: o.id, name: o.name, slug: o.slug }))}
-      sections={{ team: ctx.can("organization.read"), settings: ctx.can("organization.manage") }}
+      sections={{
+        events: ctx.can("events.read") || ctx.member.eventPermissions.size > 0,
+        team: ctx.can("organization.read"),
+        settings: ctx.can("organization.manage"),
+      }}
       pendingInvitations={pending}
     >
       {children}

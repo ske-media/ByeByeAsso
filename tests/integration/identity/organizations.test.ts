@@ -1,5 +1,6 @@
 import { type DatabaseHandle, schema } from "@kroov/database";
 import { countActiveOwners, loadMemberContext, requirePermission } from "@kroov/domain/authorization";
+import { createEvent } from "@kroov/domain/events";
 import { ConflictError, ForbiddenError, NotFoundError, PreconditionFailedError } from "@kroov/domain/kernel";
 import {
   createOrganization,
@@ -118,8 +119,15 @@ describe("A. organisations — rôles et dernier propriétaire", () => {
   });
 
   it("event-scoped grants only apply to that event", async () => {
-    const eventA = "11111111-1111-4111-8111-111111111111";
-    const eventB = "22222222-2222-4222-8222-222222222222";
+    // Real events: scoped grants carry a composite FK to events(organization_id, id).
+    const mk = (title: string) =>
+      createEvent(handle.db, camille.actor, orgId, {
+        title,
+        startsAt: new Date("2027-06-12T16:00:00Z"),
+        endsAt: new Date("2027-06-13T00:00:00Z"),
+      });
+    const eventA = (await mk("Événement A")).id;
+    const eventB = (await mk("Événement B")).id;
     await setMemberRoles(handle.db, alex.actor, orgId, noraMemberId, {
       grants: [{ role: "volunteer_manager", eventId: eventA }],
     });

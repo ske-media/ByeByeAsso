@@ -1,6 +1,7 @@
 export * from "./components/badge";
 export * from "./components/button";
 export * from "./components/dialog";
+export * from "./components/event-poster";
 export * from "./components/form-field";
 export * from "./components/panel";
 export * from "./components/shells";

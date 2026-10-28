@@ -39,6 +39,10 @@ export default async function InvitationPage({ params }: { params: Promise<{ tok
             <dd className="m-0 font-bold">{invitation.organizationName}</dd>
             <dt className="text-muted">Rôle</dt>
             <dd className="m-0 font-bold">{invitation.roleName}</dd>
+            <dt className="text-muted">Périmètre</dt>
+            <dd className="m-0 font-bold">
+              {invitation.eventTitle ? `Événement · ${invitation.eventTitle}` : "Toute l'organisation"}
+            </dd>
             <dt className="text-muted">Compte attendu</dt>
             <dd className="m-0 font-bold">{invitation.emailHint}</dd>
             <dt className="text-muted">Valable jusqu'au</dt>

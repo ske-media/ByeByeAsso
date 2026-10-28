@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kroov API
-  version: 0.1.0-phase1
+  version: 0.2.0-phase2
   description: |
     API `/api/v1` de Kroov. Authentification par cookie de session (Better Auth, `/api/auth/*`).
     Toute requête modifiante est vérifiée sur son origine (CSRF). Les erreurs ont la forme
@@ -13,6 +13,10 @@ info:
     Idempotence : les lectures sont idempotentes ; `POST /organizations` et `POST …/invitations` sont
     protégés par unicité (slug, e-mail en attente) ; `POST /invitations/{token}/accept` est à usage unique
     (412 au second appel). Transactions : chaque commande écrit son journal d'audit dans la même transaction.
+
+    Événements (phase 2) : les mutations portent `version` (concurrence optimiste, 409 `stale_version`).
+    Publication : 412 `publication_blocked` avec `details.checklist` (clés manquantes). Les routes
+    `/public/*` sont anonymes et ne servent que les événements publiés (brouillons = 404, jamais listés).
 servers:
   - url: /api/v1
 components:
@@ -99,6 +103,7 @@ components:
         role: { $ref: "#/components/schemas/Role" }
         roleName: { type: string }
         eventId: { type: [string, "null"] }
+        eventTitle: { type: [string, "null"] }
         status: { type: string, enum: [pending, accepted, revoked, expired] }
         expiresAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
@@ -109,10 +114,120 @@ components:
       properties:
         organizationName: { type: string }
         roleName: { type: string }
+        eventTitle:
+          { type: [string, "null"], description: "Titre de l'événement si l'invitation est limitée à un seul." }
         invitedByName: { type: string }
         emailHint: { type: string, example: "no••••@example.org" }
         status: { type: string, enum: [pending, accepted, revoked, expired] }
         expiresAt: { type: string, format: date-time }
+    EventStatus:
+      type: string
+      enum: [draft, published, suspended, completed, cancelled, archived]
+    EventVisibility:
+      type: string
+      enum: [public, unlisted, private]
+    EventLocation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        addressLine1: { type: [string, "null"] }
+        addressLine2: { type: [string, "null"] }
+        postalCode: { type: [string, "null"] }
+        city: { type: string }
+        country: { type: string, example: FR }
+        accessNotes: { type: [string, "null"] }
+    EventSettings:
+      type: object
+      properties:
+        accessInfo: { type: [string, "null"] }
+        programme: { type: [string, "null"] }
+        contactEmail: { type: [string, "null"] }
+        externalUrl: { type: [string, "null"] }
+        showRemainingCapacity: { type: boolean }
+    Event:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        organizationId: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        tagline: { type: [string, "null"] }
+        description: { type: [string, "null"] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        doorsAt: { type: [string, "null"], format: date-time }
+        timezone: { type: string, example: Europe/Paris }
+        capacity: { type: integer, minimum: 0 }
+        status: { $ref: "#/components/schemas/EventStatus" }
+        visibility: { $ref: "#/components/schemas/EventVisibility" }
+        version: { type: integer, minimum: 1 }
+        publishedAt: { type: [string, "null"], format: date-time }
+        cancelledAt: { type: [string, "null"], format: date-time }
+        cancellationReason: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        location: { oneOf: [{ $ref: "#/components/schemas/EventLocation" }, { type: "null" }] }
+        settings: { $ref: "#/components/schemas/EventSettings" }
+    EventListItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string }
+        status: { $ref: "#/components/schemas/EventStatus" }
+        visibility: { $ref: "#/components/schemas/EventVisibility" }
+        capacity: { type: integer }
+        locationName: { type: [string, "null"] }
+        city: { type: [string, "null"] }
+    EventWrite:
+      type: object
+      description: Corps de création (tous requis sauf mention) ; en PATCH tous optionnels + `version` requis.
+      properties:
+        title: { type: string, minLength: 2, maxLength: 140 }
+        slug: { type: string, description: "Optionnel : dérivé du titre (suffixe en cas de doublon)." }
+        tagline: { type: string, maxLength: 160 }
+        description: { type: string, maxLength: 20000 }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time, description: "Strictement après startsAt, ≤ 31 jours." }
+        doorsAt: { type: string, format: date-time, description: "≤ startsAt." }
+        timezone: { type: string, default: Europe/Paris }
+        capacity: { type: integer, minimum: 0, default: 0 }
+        visibility: { $ref: "#/components/schemas/EventVisibility" }
+        locationId: { type: string, format: uuid, description: "Lieu de la même organisation (404 sinon)." }
+        settings: { $ref: "#/components/schemas/EventSettings" }
+    PublicOrganization:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        legalForm: { type: string }
+        timezone: { type: string }
+        contactEmail: { type: [string, "null"] }
+        website: { type: [string, "null"] }
+    PublicEventCard:
+      type: object
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        tagline: { type: [string, "null"] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        timezone: { type: string }
+        status: { $ref: "#/components/schemas/EventStatus" }
+        locationName: { type: [string, "null"] }
+        city: { type: [string, "null"] }
+    PublicEvent:
+      description: Même forme que `Event` sans `organizationId` ni `version`, avec `organization`.
+      allOf:
+        - { $ref: "#/components/schemas/Event" }
+        - type: object
+          properties:
+            organization: { $ref: "#/components/schemas/PublicOrganization" }
     AuditEntry:
       type: object
       properties:
@@ -145,6 +260,20 @@ components:
       {
         description: Valeurs invalides,
         content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
+    StaleVersion:
+      {
+        description: "409 stale_version — l'événement a été modifié entre-temps ; rechargez.",
+        content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } },
+      }
+    EventData:
+      {
+        description: OK,
+        content:
+          {
+            application/json:
+              { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Event" } } } },
+          },
       }
 security:
   - session: []
@@ -509,3 +638,272 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "412": { description: Expirée, close ou e-mail non vérifié }
+
+  # ----------------------------------------------------------------------------------------------
+  # Phase 2 — événements, lieux, lecture publique
+  # ----------------------------------------------------------------------------------------------
+  /organizations/{organizationId}/events:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Lister les événements (toute l'organisation, ou seulement ceux attribués)
+      description: |
+        `events.read`. Un membre dont les droits sont limités à certains événements ne voit que ceux-là.
+        `status=active` (défaut : brouillons + publiés + suspendus) · `all` · ou un statut précis.
+      parameters:
+        - {
+            name: status,
+            in: query,
+            schema: { type: string, enum: [active, all, draft, published, suspended, completed, cancelled, archived] },
+          }
+        - { name: q, in: query, schema: { type: string }, description: Recherche sur le titre }
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/EventListItem" } } },
+                      },
+                  },
+              },
+          }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Créer un événement (brouillon)
+      description: "`events.create`. Slug dérivé du titre si absent. Audit `event.created`."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EventWrite" } } }
+      responses:
+        "201": { $ref: "#/components/responses/EventData" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Lieu inconnu dans cette organisation }
+        "409": { description: Slug déjà utilisé (si fourni explicitement) }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/events/{eventId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Détail d'un événement
+      description: "`events.read` au périmètre de l'événement ; 404 hors périmètre (existence non divulguée)."
+      responses:
+        "200": { $ref: "#/components/responses/EventData" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Modifier un événement
+      description: |
+        `events.update`. Corps : champs de `EventWrite` (tous optionnels) + `version` (requis).
+        Un événement publié dont les dates ou le lieu changent émet `event.logistics_changed` (outbox).
+        Un événement archivé n'est plus modifiable (412). Audit `event.updated` avec le diff des champs.
+      responses:
+        "200": { $ref: "#/components/responses/EventData" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/StaleVersion" }
+        "412": { description: Événement archivé ou lieu archivé }
+        "422": { $ref: "#/components/responses/Validation" }
+    delete:
+      summary: Supprimer un brouillon
+      description: "`events.update`. Brouillons uniquement (412 sinon) ; un événement publié s'annule puis s'archive. Audit `event.deleted`."
+      responses:
+        "204": { description: Supprimé }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { description: Pas un brouillon }
+  /organizations/{organizationId}/events/{eventId}/publish:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Publier
+      description: |
+        `events.publish`. Corps `{ version }`. Transition `draft → published` gardée par la check-list
+        (titre, description ≥ 20 caractères, dates cohérentes et futures, lieu, capacité > 0) et par le
+        statut actif de l'organisation (verrou `FOR UPDATE`). 412 `publication_blocked` avec
+        `details.checklist` ; outbox `event.published` ; audit `event.published`.
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              { schema: { type: object, required: [version], properties: { version: { type: integer } } } },
+          }
+      responses:
+        "200": { $ref: "#/components/responses/EventData" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/StaleVersion" }
+        "412": { description: Check-list incomplète ou transition impossible }
+  /organizations/{organizationId}/events/{eventId}/cancel:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Annuler un événement publié
+      description: "`events.cancel`. Corps `{ version, reason }` (motif ≥ 5 caractères, conservé et affiché publiquement). Outbox `event.cancelled`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, reason]
+              properties: { version: { type: integer }, reason: { type: string, minLength: 5, maxLength: 1000 } }
+      responses:
+        "200": { $ref: "#/components/responses/EventData" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/StaleVersion" }
+        "412": { description: Transition impossible depuis ce statut }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/events/{eventId}/archive:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Archiver (terminal)
+      description: "`events.update`. Depuis brouillon, terminé ou annulé. Corps `{ version }`."
+      responses:
+        "200": { $ref: "#/components/responses/EventData" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/StaleVersion" }
+        "412": { description: Transition impossible depuis ce statut }
+  /organizations/{organizationId}/locations:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Lieux actifs de l'organisation
+      description: "`events.read`."
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties: { data: { type: array, items: { $ref: "#/components/schemas/EventLocation" } } },
+                      },
+                  },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      summary: Créer un lieu
+      description: "`events.update`. Audit `location.created`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, city]
+              properties:
+                name: { type: string, maxLength: 120 }
+                addressLine1: { type: string }
+                addressLine2: { type: string }
+                postalCode: { type: string }
+                city: { type: string }
+                country: { type: string, default: FR }
+                accessNotes: { type: string }
+      responses:
+        "201":
+          {
+            description: Créé,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/EventLocation" } } } },
+              },
+          }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /organizations/{organizationId}/locations/{locationId}:
+    parameters:
+      - { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: locationId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Modifier un lieu
+      description: "`events.update`."
+      responses:
+        "200": { description: OK }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Validation" }
+    delete:
+      summary: Archiver un lieu
+      description: "`events.update`. Les événements qui le référencent le conservent ; il n'est plus proposé."
+      responses:
+        "204": { description: Archivé }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/organizations/{slug}:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Carte publique d'une organisation et ses événements publiés
+      description: "Anonyme. `Cache-Control: public, max-age=60`. Événements publiés et publics, terminés depuis moins de 30 jours inclus."
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      {
+                        type: object,
+                        properties:
+                          {
+                            data:
+                              {
+                                type: object,
+                                properties:
+                                  {
+                                    organization: { $ref: "#/components/schemas/PublicOrganization" },
+                                    events: { type: array, items: { $ref: "#/components/schemas/PublicEventCard" } },
+                                  },
+                              },
+                          },
+                      },
+                  },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /public/organizations/{slug}/events/{eventSlug}:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { type: string } }
+      - { name: eventSlug, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Page publique d'un événement
+      description: |
+        Anonyme. Servi si publié, terminé ou annulé ET public ou « lien direct » (unlisted). Brouillons,
+        suspendus, archivés et privés : 404. Jamais `organizationId` ni `version`.
+      security: []
+      responses:
+        "200":
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { type: object, properties: { data: { $ref: "#/components/schemas/PublicEvent" } } } },
+              },
+          }
+        "404": { $ref: "#/components/responses/NotFound" }

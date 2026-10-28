@@ -1,3 +1,4 @@
+import { listEvents } from "@kroov/domain/events";
 import { listInvitations, listMembers } from "@kroov/domain/organizations";
 import {
   Badge,
@@ -42,10 +43,14 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
   const canManage = ctx.can("members.manage");
   const actorIsOwner = ctx.member.organizationRoles.includes("owner");
   const org = ctx.organization;
-  const [members, invitations] = await Promise.all([
+  const [members, invitations, events] = await Promise.all([
     listMembers(db(), ctx.session.actor, org.id),
     canInvite ? listInvitations(db(), ctx.session.actor, org.id) : Promise.resolve([]),
+    ctx.can("events.read") ? listEvents(db(), ctx.session.actor, org.id, { status: "active" }) : Promise.resolve([]),
   ]);
+  const scopeOptions = events.map((e) => ({ id: e.id, title: e.title }));
+  const _eventTitle = (id: string | null) =>
+    id ? (scopeOptions.find((e) => e.id === id)?.title ?? "Événement") : null;
   const pending = invitations.filter((i) => i.status === "pending" || i.status === "expired");
   const owners = members.filter((m) => m.grants.some((g) => g.role === "owner" && g.eventId === null)).length;
 
@@ -54,7 +59,7 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
       <PageHeader
         eyebrow="Équipe & accès"
         title="Chacun son rôle. Ensemble, le contrôle."
-        description="Les rôles s'appliquent à votre organisation. Les périmètres par événement arriveront avec les événements."
+        description="Les rôles s'appliquent à toute l'organisation ou à un seul événement. Chaque permission est vérifiée côté serveur."
       />
 
       <Panel>
@@ -95,7 +100,15 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
                         ))}
                       </div>
                     </TD>
-                    <TD>{m.grants.some((g) => g.eventId) ? "Événements attribués" : "Organisation"}</TD>
+                    <TD>
+                      {m.grants.length === 0
+                        ? "—"
+                        : m.grants.every((g) => g.eventId)
+                          ? "Événements attribués"
+                          : m.grants.some((g) => g.eventId)
+                            ? "Organisation + événements"
+                            : "Organisation"}
+                    </TD>
                     <TD>
                       {m.emailVerified ? (
                         <Badge tone="lime">Actif</Badge>
@@ -113,10 +126,11 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
                           member={{
                             id: m.id,
                             name: m.name,
-                            roles: m.grants.filter((g) => !g.eventId).map((g) => g.role),
+                            grants: m.grants.map((g) => ({ role: g.role, eventId: g.eventId })),
                           }}
                           actorIsOwner={actorIsOwner}
                           targetIsLastOwner={isOwner && owners <= 1}
+                          events={scopeOptions}
                         />
                       ) : null}
                     </TD>
@@ -129,10 +143,10 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
       </Panel>
 
       {canInvite ? (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <Panel>
             <PanelTitle>Inviter un membre</PanelTitle>
-            <InviteForm organizationId={org.id} slug={org.slug} actorIsOwner={actorIsOwner} />
+            <InviteForm organizationId={org.id} slug={org.slug} actorIsOwner={actorIsOwner} events={scopeOptions} />
           </Panel>
           <Panel>
             <PanelTitle>Invitations en attente</PanelTitle>
@@ -147,7 +161,9 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
                     <div className="min-w-0">
                       <div className="truncate font-bold">{inv.email}</div>
                       <div className="text-[11px] text-muted">
-                        {roleLabel(inv.role)} · {inv.status === "expired" ? "expirée le" : "expire le"}{" "}
+                        {roleLabel(inv.role)}
+                        {inv.eventTitle ? ` (${inv.eventTitle})` : ""} ·{" "}
+                        {inv.status === "expired" ? "expirée le" : "expire le"}{" "}
                         {formatDate(inv.expiresAt, org.timezone)} · invitée par {inv.invitedByName}
                       </div>
                     </div>

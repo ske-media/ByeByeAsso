@@ -3,6 +3,7 @@ import { loadServerEnv } from "@kroov/config/env";
 import { createDatabase } from "@kroov/database";
 import { config as loadDotenv } from "dotenv";
 import pino from "pino";
+import { registerEventJobs } from "./jobs/events";
 import { registerMaintenanceJobs } from "./jobs/maintenance";
 import { registerOutboxRelay } from "./jobs/outbox-relay";
 import { createQueue } from "./queue";
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
 
   await registerOutboxRelay({ queue, db: database.db, logger });
   await registerMaintenanceJobs({ queue, db: database.db, logger });
+  await registerEventJobs({ queue, db: database.db, logger });
 
   logger.info({ concurrency: env.WORKER_CONCURRENCY }, "worker started");
 

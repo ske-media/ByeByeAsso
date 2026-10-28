@@ -73,6 +73,7 @@ export async function inviteMemberAction(
     await createInvitation(db(), actor, invitationContext(), organizationId, {
       email: values.email ?? "",
       role: values.role as Role,
+      ...(values.eventId && values.eventId !== "organization" ? { eventId: values.eventId } : {}),
     });
   } catch (error) {
     return actionError(error, values);
@@ -118,12 +119,26 @@ export async function setMemberRolesAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const roles = formData.getAll("roles").filter((r): r is string => typeof r === "string") as Role[];
+  const raw = formData.get("grants");
   const reason = formData.get("reason");
+  let grants: Array<{ role: Role; eventId?: string }> = [];
+  try {
+    const parsed: unknown = typeof raw === "string" ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) {
+      grants = parsed
+        .filter(
+          (g): g is { role: Role; eventId?: string } =>
+            typeof g === "object" && g !== null && typeof (g as { role?: unknown }).role === "string",
+        )
+        .map((g) => (g.eventId ? { role: g.role, eventId: g.eventId } : { role: g.role }));
+    }
+  } catch {
+    return { status: "error", message: "Rôles illisibles. Rechargez la page et réessayez." };
+  }
   try {
     const actor = await currentActor();
     await setMemberRoles(db(), actor, organizationId, memberId, {
-      grants: roles.map((role) => ({ role })),
+      grants,
       reason: typeof reason === "string" ? reason : undefined,
     });
   } catch (error) {

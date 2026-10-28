@@ -13,7 +13,7 @@ export interface OrgNavProps {
   userName: string;
   organizations: Array<{ id: string; name: string; slug: string }>;
   /** Which sections the member may see (computed server-side). */
-  sections: { team: boolean; settings: boolean };
+  sections: { events: boolean; team: boolean; settings: boolean };
   pendingInvitations?: number;
   children: ReactNode;
 }
@@ -35,6 +35,16 @@ export function OrgShell({
   const base = `/o/${slug}`;
   const nav = [
     { href: base, label: "Vue d'ensemble", icon: "✳", active: pathname === base },
+    ...(sections.events
+      ? [
+          {
+            href: `${base}/evenements`,
+            label: "Événements",
+            icon: "▣",
+            active: pathname.startsWith(`${base}/evenements`) || pathname.startsWith(`${base}/lieux`),
+          },
+        ]
+      : []),
     ...(sections.team
       ? [
           {
@@ -65,7 +75,15 @@ export function OrgShell({
 
   const crumbs = pathname.replace(base, "").split("/").filter(Boolean);
   const sectionLabel =
-    crumbs[0] === "equipe" ? "Équipe & accès" : crumbs[0] === "parametres" ? "Paramètres" : "Vue d'ensemble";
+    crumbs[0] === "equipe"
+      ? "Équipe & accès"
+      : crumbs[0] === "parametres"
+        ? "Paramètres"
+        : crumbs[0] === "evenements"
+          ? "Événements"
+          : crumbs[0] === "lieux"
+            ? "Lieux"
+            : "Vue d'ensemble";
 
   return (
     <OrganizationShell

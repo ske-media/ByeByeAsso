@@ -130,6 +130,35 @@ export async function getOrganization(
   return getOrganizationUnchecked(db, organizationId);
 }
 
+/**
+ * Resolve a slug to the organization card for any ACTIVE MEMBER of it (including members whose
+ * only grants are event-scoped): this is what the organizer shell needs. Everything beyond the
+ * card (members, settings, audit) is guarded by its own permission. 404 when unknown or not a member.
+ */
+export async function getOrganizationForMember(
+  db: DbExecutor,
+  actor: Actor,
+  slug: string,
+): Promise<OrganizationDetail> {
+  const userId = requireUserId(actor);
+  const rows = await db
+    .select({ id: schema.organizations.id })
+    .from(schema.organizations)
+    .innerJoin(
+      schema.organizationMembers,
+      and(
+        eq(schema.organizationMembers.organizationId, schema.organizations.id),
+        eq(schema.organizationMembers.userId, userId),
+        eq(schema.organizationMembers.status, "active"),
+      ),
+    )
+    .where(eq(schema.organizations.slug, slug))
+    .limit(1);
+  const row = rows[0];
+  if (!row) throw new NotFoundError("Organisation", slug);
+  return getOrganizationUnchecked(db, row.id);
+}
+
 /** Resolve a slug to an organization the actor can read. 404 when unknown or not a member. */
 export async function getOrganizationBySlug(db: DbExecutor, actor: Actor, slug: string): Promise<OrganizationDetail> {
   const rows = await db

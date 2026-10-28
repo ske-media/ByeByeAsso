@@ -1,8 +1,10 @@
 /**
  * events module — public API.
- *
- * Phase 0: boundary declared, no behaviour yet. Implementation phase is documented in
- * docs/architecture.md (§ Domain modules). Other modules must import ONLY from this file,
- * never from internal files of this directory, and never touch this module's tables directly.
+ * Lifecycle through the typed state machine only; every command authorises with
+ * `events.*` permissions at organization or event scope and writes its audit entry.
  */
-export const MODULE_NAME = "events" as const;
+export * from "./events";
+export * from "./locations";
+export * from "./public";
+export * from "./schemas";
+export * from "./state-machine";

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { timestamp, uuid } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, ForeignKeyBuilder, timestamp, uuid } from "drizzle-orm/pg-core";
 
 /**
  * Column helpers shared by every table.
@@ -25,3 +25,15 @@ export const timestamps = () => ({
 export const deletedAt = () => timestamp("deleted_at", { withTimezone: true, mode: "date" });
 
 export const nowSql = sql`now()`;
+
+/**
+ * Composite foreign key whose target columns are resolved lazily. Needed when two schema
+ * modules reference each other (identity ↔ events): the target table may not be initialised
+ * yet at module-evaluation time, but it is when Drizzle reads the reference.
+ */
+export function lazyForeignKey(config: () => { name: string; columns: AnyPgColumn[]; foreignColumns: AnyPgColumn[] }) {
+  return new ForeignKeyBuilder(() => {
+    const { name, columns, foreignColumns } = config();
+    return { name, columns: columns as [AnyPgColumn, ...AnyPgColumn[]], foreignColumns };
+  });
+}

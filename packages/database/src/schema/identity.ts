@@ -15,8 +15,9 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./_shared";
+import { id, lazyForeignKey, timestamps } from "./_shared";
 import { users } from "./auth";
+import { events } from "./events";
 
 /**
  * IDENTITY domain: profiles, organizations (tenants), membership, RBAC, invitations, audit.
@@ -187,8 +188,8 @@ export const rolePermissions = pgTable(
 );
 
 /**
- * A role granted to a member, organization-wide (event_id NULL) or scoped to one event.
- * `event_id` gets its FK in Phase 2 (events table).
+ * A role granted to a member, organization-wide (event_id NULL) or scoped to one event
+ * of the SAME organization (composite FK, lazily resolved: identity ↔ events).
  */
 export const memberRoleAssignments = pgTable(
   "member_role_assignments",
@@ -209,6 +210,11 @@ export const memberRoleAssignments = pgTable(
       foreignColumns: [organizationMembers.organizationId, organizationMembers.id],
       name: "member_role_assignments_member_fk",
     }).onDelete("cascade"),
+    lazyForeignKey(() => ({
+      name: "member_role_assignments_event_fk",
+      columns: [t.organizationId, t.eventId],
+      foreignColumns: [events.organizationId, events.id],
+    })).onDelete("cascade"),
     uniqueIndex("member_role_assignments_org_scope_uq").on(t.memberId, t.roleId).where(sql`${t.eventId} is null`),
     uniqueIndex("member_role_assignments_event_scope_uq")
       .on(t.memberId, t.roleId, t.eventId)
@@ -254,6 +260,11 @@ export const organizationInvitations = pgTable(
     ...timestamps(),
   },
   (t) => [
+    lazyForeignKey(() => ({
+      name: "organization_invitations_event_fk",
+      columns: [t.organizationId, t.eventId],
+      foreignColumns: [events.organizationId, events.id],
+    })).onDelete("cascade"),
     uniqueIndex("organization_invitations_token_hash_uq").on(t.tokenHash),
     uniqueIndex("organization_invitations_pending_email_uq")
       .on(t.organizationId, t.email)
