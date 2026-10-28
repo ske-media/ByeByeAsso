@@ -114,6 +114,7 @@ Phases d'implémentation par module : identity/organizations/audit (1 — livré
 - Phase 2 (EVENTS) : `event_locations`, `events` (slug unique par organisation, instants `timestamptz` + `timezone`, `version`, statut/visibilité en enums, FK composite vers le lieu), `event_settings`, `stored_files`, `event_media`, `form_definitions`, `form_fields`, `form_submissions`, `form_answers` ; FK composites `(organization_id, event_id)` posées sur `member_role_assignments` et `organization_invitations`.
 - Phase 3 (TICKETING + PAYMENTS) : `ticket_types`, `ticket_inventory_pools`, `ticket_pool_links`, `inventory_holds`, `inventory_hold_items`, `orders`, `order_items`, `tickets`, `checkins`, `promo_codes`, `promo_redemptions`, `payment_accounts`, `payments`, `payment_attempts`, `payment_webhook_events`, `refunds`, `refund_items`, `ledger_accounts`, `ledger_transactions`, `ledger_entries`, `financial_documents` ; `events` gagne `ticketing_status`, `max_tickets_per_order`, `sales_close_at`, `nominative_tickets`.
 - Diagramme ER : `docs/er-diagram.md` (mis à jour à chaque phase).
+- **Base hébergée (Supabase)** : la base de l'équipe est tenue à jour à chaque phase. `node scripts/supabase-bundle.mjs` produit un fichier SQL par migration (sans marqueurs Drizzle) suivi de la ligne de bookkeeping `drizzle_migrations` exacte, applicable via le SQL editor / MCP Supabase ; un `pnpm db:migrate` ultérieur avec `DATABASE_URL` pointant sur Supabase ne rejoue rien (vérifié sur base locale vierge : 50 tables, 4 lignes, migrate = no-op).
 
 ## 7. Processus worker
 
